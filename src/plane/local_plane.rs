@@ -264,6 +264,12 @@ impl LocalPlane {
             args.backend = Some("local".to_string());
         }
         crate::compute::validate_run_args(&args)?;
+        if (args.cpus.is_some() || args.mem.is_some()) && args.backend.as_deref() != Some("slurm") {
+            return Err(anyhow!(
+                "--cpus/--mem only apply with --backend slurm. Size other backends with \
+                 --flavor."
+            ));
+        }
         args.agent_origin = crate::agent_origin();
         // Coarse backend label for analytics; the backend name is already an
         // enum, never user data. Recorded before the (borrowing) dispatch below.
