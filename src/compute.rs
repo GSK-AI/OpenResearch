@@ -1121,6 +1121,8 @@ pub(crate) mod tests {
             manifest: None,
             image: None,
             timeout: None,
+            cpus: None,
+            mem: None,
             force: false,
             chat_session_id: None,
             invocation_context: None,
