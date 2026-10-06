@@ -121,6 +121,7 @@ import { OfflineBanner } from "./components/OfflineBanner";
 import { NewProjectDialog } from "./components/ProjectsHome";
 import { ExperimentsTable } from "./components/ExperimentsTable";
 import { archiveActionsByExperiment } from "./components/ArchiveMenu";
+import { ExperimentHistory } from "./components/ExperimentHistory";
 import { Md } from "./components/Md";
 import { SettingsView, type SettingsTab } from "./components/SettingsPage";
 import { DemoWelcomeModal } from "./components/Tour";
@@ -228,7 +229,7 @@ function fileBranchLabel(tab: FileViewDef, baselineBranch?: string): string | un
   return tab.ref ?? tab.branchLabel ?? baselineBranch;
 }
 
-type ExperimentsView = "tree" | "table";
+type ExperimentsView = "tree" | "table" | "history";
 
 const PANEL_MARGIN = 10;
 const WORKSPACE_CARD_MIN_WIDTH = 1448; // 1420px content plus the body’s 14px gutters.
@@ -1968,6 +1969,13 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
                       >
                         {m.app_tree()}
                       </button>
+                      <button
+                        className={view === "history" ? "active" : ""}
+                        aria-pressed={view === "history"}
+                        onClick={() => setView("history")}
+                      >
+                        {m.app_history()}
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -1990,7 +1998,7 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
                         onViewportChange={setTreeViewport}
                       />
                     )
-                  ) : (
+                  ) : view === "table" ? (
                     <ExperimentsTable
                       archiveActions={archiveActions}
                       runs={scopedRuns}
@@ -2021,7 +2029,32 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
                       onArchive={archiveExperiment}
                       onCancel={cancelRun}
                     />
-                  )}
+                  ) : activeProject ? (
+                    <ExperimentHistory
+                      project={activeProject}
+                      experiments={experiments}
+                      runs={runs}
+                      agentSessionId={effectiveScope === "agent" ? activeSessionId : null}
+                      emptyHint={
+                        effectiveScope === "agent" && experiments.length > 0
+                          ? m.app_no_task_experiments()
+                          : undefined
+                      }
+                      onOpenChanges={(experimentId) => {
+                        const experiment = experiments.find((item) => item.id === experimentId);
+                        if (experiment) {
+                          openCodeTabForExperiment(
+                            experiment.id,
+                            experiment.branchName,
+                            "changes",
+                          );
+                        }
+                      }}
+                      onOpenRun={(run) => {
+                        openExperimentTab(run.experimentId, "terminal", "preview", run.id);
+                      }}
+                    />
+                  ) : null}
                 </div>
               </TabBody>
             ) : rightTab === "files" ? (
