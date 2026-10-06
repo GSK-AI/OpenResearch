@@ -32,7 +32,7 @@ import {
 } from "../queries/settings";
 
 import { getOverleafSettingsQuery } from "../queries/files";
-import { listRunsQuery } from "../queries/projects";
+import { githubAccountQuery, listRunsQuery } from "../queries/projects";
 import {
   ArrowLeft,
   ArrowRight,
@@ -277,6 +277,22 @@ const GIT_SETTINGS_CARD_CLASS_NAME = [
 const GIT_CARD_ACTIONS_CLASS_NAME = [
   "git-card-actions flex flex-wrap gap-2 mt-3.5 pt-3.5",
   "border-t border-t-border-variant",
+].join(" ");
+
+const GITHUB_DESTINATION_CLASS_NAME = [
+  "github-destination mt-3.5 p-3 border border-border-variant rounded-md bg-surface",
+  "[&_.settings-label]:mb-2 [&_.settings-label]:text-xs",
+  "[&_.settings-label]:font-semibold [&_.settings-label]:text-subtext",
+].join(" ");
+
+const GITHUB_DESTINATION_SEGMENT_CLASS_NAME = [
+  "seg form-seg inline-flex items-center gap-0.5 p-[3px] rounded-md bg-hover-subtle",
+  "[&_button]:py-[3px] [&_button]:px-3 [&_button]:text-sm",
+  "[&_button]:font-medium [&_button]:text-text [&_button]:rounded-sm",
+  "[&_button:not(:disabled):hover]:text-text",
+  "[&_button.active]:bg-background",
+  "[&_button.active]:shadow-segment",
+  "[&_button:disabled]:text-muted [&_button:disabled]:cursor-default",
 ].join(" ");
 
 const SETTINGS_STACK_SECTION_CLASS_NAME = [
@@ -3183,7 +3199,11 @@ function GitTab({
   const [defaultPromptOpen, setDefaultPromptOpen] = useState(false);
   const [defaultPromptSaving, setDefaultPromptSaving] = useState(false);
   const [defaultPromptError, setDefaultPromptError] = useState<string | null>(null);
+  const [destinationKind, setDestinationKind] = useState<"personal" | "organization">("personal");
+  const [organization, setOrganization] = useState("");
   const hasGithubRepository = Boolean(status?.github.owner && status.github.repo);
+  const accountQuery = useQuery({ ...githubAccountQuery(), enabled: Boolean(status?.github.authenticated) });
+  const githubLogin = status?.github.authenticated ? accountQuery.data?.login ?? null : null;
 
   const load = async () => { await statusQuery.refetch({ cancelRefetch: false }); };
 
@@ -3203,9 +3223,10 @@ function GitTab({
 
   const enableSync = () => {
     if (!project) return;
+    const destination = destinationKind === "organization" ? organization.trim() : undefined;
     setSaving(true);
     setError(null);
-    void enableProjectGithub(project.id)
+    void enableProjectGithub(project.id, destination)
       .then((result) => {
         setStatus(result.git);
         onProjectUpdate(result.project);
@@ -3220,6 +3241,10 @@ function GitTab({
       .catch((err) => setError(syncErrorMessage(err)))
       .finally(() => setSaving(false));
   };
+
+  const destinationOwner =
+    destinationKind === "organization" ? organization.trim() : githubLogin;
+  const destinationReady = Boolean(destinationOwner);
 
   const finishDefaultPrompt = (enabled: boolean) => {
     setDefaultPromptSaving(true);
@@ -3277,9 +3302,44 @@ function GitTab({
                     ? m.settings_use_existing_github_repository()
                     : m.settings_create_private_github_repository()}
                 </p>
+                <div className={GITHUB_DESTINATION_CLASS_NAME}>
+                  <div className="settings-label">{m.settings_github_new_repository_destination()}</div>
+                  <div className={GITHUB_DESTINATION_SEGMENT_CLASS_NAME}>
+                    <button
+                      type="button"
+                      className={destinationKind === "personal" ? "active" : ""}
+                      onClick={() => setDestinationKind("personal")}
+                      disabled={!githubLogin}
+                    >
+                      {githubLogin ? githubLogin : m.settings_github_resolving_account()}
+                    </button>
+                    <button
+                      type="button"
+                      className={destinationKind === "organization" ? "active" : ""}
+                      onClick={() => setDestinationKind("organization")}
+                    >
+                      {m.settings_github_destination_organization()}
+                    </button>
+                  </div>
+                  {destinationKind === "organization" && (
+                    <Input
+                      className="mt-2.5"
+                      value={organization}
+                      onChange={(event) => setOrganization(event.target.value)}
+                      placeholder="research-org"
+                      aria-label={m.settings_github_organization_label()}
+                      spellCheck={false}
+                    />
+                  )}
+                  <p className="git-card-helper mono mt-2.5 mx-0 mb-0 font-mono text-xs text-muted">
+                    {destinationOwner
+                      ? m.settings_github_destination_owner({ url: ltr(`github.com/${destinationOwner}`) })
+                      : m.settings_github_destination_choose_account()}
+                  </p>
+                </div>
                 <div className={GIT_CARD_ACTIONS_CLASS_NAME}>
                   {hasGithubRepository && status.github.url && <ButtonLink href={status.github.url} target="_blank" rel="noreferrer">{m.settings_page_open_on_git_hub()} <ExternalLink size={12} /></ButtonLink>}
-                  <Button variant="primary" disabled={saving} onClick={enableSync}>{saving ? m.repository_enabling() : m.repository_enable_syncing()}</Button>
+                  <Button variant="primary" disabled={saving || !destinationReady} onClick={enableSync}>{saving ? m.repository_enabling() : m.repository_enable_syncing()}</Button>
                 </div>
               </>
             )}
