@@ -1557,7 +1557,7 @@ async fn create_project(
         .ok_or_else(|| bad_request("project deletion is in progress"))?;
     drop(create_admission);
     let (project, github_publication_error) = if github_sync_enabled {
-        match push_project_for_sync(project.clone(), &state.chat).await {
+        match push_project_for_sync(project.clone(), &state.chat, None).await {
             Ok((project, _)) => (project, None),
             Err(error) => {
                 let project = Store::open()?
@@ -1715,6 +1715,7 @@ fn github_push_was_rejected(error: &str) -> bool {
 async fn create_independent_project_repository(
     mut project: local::model::LocalProject,
     chat: &ChatHost,
+    organization: Option<&str>,
 ) -> Result<local::model::LocalProject> {
     let store = Store::open()?;
     let legacy = store
@@ -1737,7 +1738,7 @@ async fn create_independent_project_repository(
     let reroot_shallow = local::git::prepare_shallow_repository_for_publication(
         std::path::Path::new(&project.repo_path),
     )?;
-    let (owner, repo) = local::github::create_project_repo(&project.slug).await?;
+    let (owner, repo) = local::github::create_project_repo(&project.slug, organization).await?;
     if reroot_shallow {
         local::git::reroot_shallow_repository(
             std::path::Path::new(&project.repo_path),
@@ -1755,6 +1756,7 @@ async fn create_independent_project_repository(
 async fn push_project_for_sync(
     mut project: local::model::LocalProject,
     chat: &ChatHost,
+    organization: Option<&str>,
 ) -> Result<(local::model::LocalProject, local::github::Status)> {
     let github_status = local::github::status().await;
     if !github_status.installed {
@@ -1772,11 +1774,11 @@ async fn push_project_for_sync(
             .await?
             .is_some_and(|meta| meta.can_push && !meta.archived);
         if !can_push {
-            project = create_independent_project_repository(project, chat).await?;
+            project = create_independent_project_repository(project, chat, organization).await?;
             using_existing_repository = false;
         }
     } else {
-        project = create_independent_project_repository(project, chat).await?;
+        project = create_independent_project_repository(project, chat, organization).await?;
         using_existing_repository = false;
     }
 
@@ -1792,7 +1794,7 @@ async fn push_project_for_sync(
         if !using_existing_repository || !github_push_was_rejected(&error.to_string()) {
             return Err(error);
         }
-        project = create_independent_project_repository(project, chat).await?;
+        project = create_independent_project_repository(project, chat, organization).await?;
         push_once(&project)
             .await
             .map_err(|error| anyhow!("Git push task failed: {error}"))??;
@@ -1803,7 +1805,17 @@ async fn push_project_for_sync(
     Ok((project, github_status))
 }
 
-async fn enable_project_github(State(state): State<AppState>, Path(id): Path<String>) -> ApiResult {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EnableProjectGithubReq {
+    organization: Option<String>,
+}
+
+async fn enable_project_github(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<EnableProjectGithubReq>,
+) -> ApiResult {
     reject_if_moving(&state)?;
     let _admission = state
         .project_lifecycle
@@ -1815,7 +1827,12 @@ async fn enable_project_github(State(state): State<AppState>, Path(id): Path<Str
     let project = store
         .get_local_project(&id)?
         .ok_or_else(|| not_found("project"))?;
-    let (project, github_status) = push_project_for_sync(project, &state.chat)
+    let organization = req
+        .organization
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let (project, github_status) = push_project_for_sync(project, &state.chat, organization)
         .await
         .map_err(bad_request)?;
     let git_status = project_git_json(&project, github_status);
