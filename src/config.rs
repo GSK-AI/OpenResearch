@@ -339,12 +339,9 @@ pub fn synced_env_var(key: &str) -> Option<String> {
     None
 }
 
-/// All vars in the synced env file, in file order (same format as
+/// All vars in one synced env file, in file order (same format as
 /// `synced_env_var`). Malformed lines are skipped.
-pub fn list_synced_env() -> Vec<(String, String)> {
-    let Some(path) = dirs::home_dir().map(|h| h.join(".openresearch").join("env")) else {
-        return Vec::new();
-    };
+fn list_synced_env_from(path: &std::path::Path) -> Vec<(String, String)> {
     let Ok(content) = std::fs::read_to_string(path) else {
         return Vec::new();
     };
@@ -365,6 +362,26 @@ pub fn list_synced_env() -> Vec<(String, String)> {
         }
     }
     out
+}
+
+fn list_synced_env() -> Vec<(String, String)> {
+    let Some(path) = dirs::home_dir().map(|h| h.join(".openresearch").join("env")) else {
+        return Vec::new();
+    };
+    list_synced_env_from(&path)
+}
+
+/// The saved variables shown in Settings. Callers must still mask secret
+/// values before returning them to a user-facing surface.
+pub fn synced_env_for_display() -> Vec<(String, String)> {
+    list_synced_env()
+}
+
+/// Saved variables inherited by the local research agent. Compute backends
+/// must use [`run_env`] instead, so Trackio reachability cannot be bypassed by
+/// forwarding this file wholesale.
+pub fn agent_env() -> Vec<(String, String)> {
+    list_synced_env()
 }
 
 /// Drop `key`'s line from the synced env file. Missing file/key is a no-op.
@@ -473,4 +490,826 @@ pub fn set_ssh_host(host: String, options: SshHostSettings) -> Result<()> {
 pub fn set_ssh_default(host: Option<String>) -> Result<()> {
     crate::telemetry::set_ssh_default(host)?;
     Ok(())
+}
+
+// --- trackio ------------------------------------------------------------------
+//
+// Optional experiment tracking against a Trackio server the user already runs
+// (`trackio show`, self-hosted — orx never starts, tunnels or supervises one).
+// Configuration is three variables in the synced env file, so it reaches every
+// backend and the research agent through the existing `list_synced_env` path
+// with no new plumbing.
+
+/// Base URL of a self-hosted Trackio server. Trackio's own Python client reads
+/// this variable, so a run needs nothing else to log there.
+pub const TRACKIO_SERVER_URL: &str = "TRACKIO_SERVER_URL";
+/// Write token for that server. Trackio's Python client reads this variable and
+/// sends it as `X-Trackio-Write-Token`; ingestion is rejected without it unless
+/// the server runs on a Space.
+pub const TRACKIO_WRITE_TOKEN: &str = "TRACKIO_WRITE_TOKEN";
+/// Default project name. Trackio's *Python* client does **not** read this — it
+/// is the convention Trackio's own Rust/Go/JS contrib clients use, and the name
+/// orx puts in the agent's instructions and in the dashboard link.
+pub const TRACKIO_PROJECT: &str = "TRACKIO_PROJECT";
+/// Per-run name, same convention as [`TRACKIO_PROJECT`]. Orx stamps the run id
+/// so a Trackio run can be traced back to the run that produced it.
+pub const TRACKIO_RUN: &str = "TRACKIO_RUN";
+/// TensorBoard event-file directory for this run. Training frameworks can use
+/// it directly as `logging_dir`; no server, credential or package mutation is
+/// implied by ORX setting it.
+pub const TENSORBOARD_LOGDIR: &str = "TENSORBOARD_LOGDIR";
+
+/// A var from the process environment, falling back to the synced env file.
+/// Same precedence the dashboard states: orx's own environment wins.
+fn env_or_synced(key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .filter(|v| !v.is_empty())
+        .or_else(|| synced_env_var(key))
+}
+
+/// The Trackio address and its token, resolved together from whichever source
+/// won, or `None` when tracking is switched off.
+///
+/// Address and token are one credential pair, so they are read from the same
+/// source rather than independently: overriding `TRACKIO_SERVER_URL` in the
+/// process environment with a new server's write-access URL must not keep
+/// sending the *old* server's stored token to it. A standalone
+/// `TRACKIO_WRITE_TOKEN` from that same source still wins over one embedded in
+/// the URL, since it is the more explicit of the two.
+///
+/// The address comes back bare. Saving it through the dashboard already splits
+/// an embedded `write_token` out, but a variable exported straight into the
+/// environment never passed through that path, and Trackio's own documentation
+/// hands out exactly that form of URL — so normalise here too, or the token ends
+/// up pasted into the middle of every probe and dashboard link.
+fn trackio_connection() -> Option<(String, Option<String>)> {
+    if let Some(raw) = std::env::var(TRACKIO_SERVER_URL)
+        .ok()
+        .filter(|v| !v.is_empty())
+    {
+        let token = std::env::var(TRACKIO_WRITE_TOKEN)
+            .ok()
+            .filter(|v| !v.is_empty());
+        return Some(pair_trackio_connection(&raw, token));
+    }
+    let raw = synced_env_var(TRACKIO_SERVER_URL)?;
+    Some(pair_trackio_connection(
+        &raw,
+        synced_env_var(TRACKIO_WRITE_TOKEN),
+    ))
+}
+
+/// The pairing [`trackio_connection`] applies once it has picked a source, with
+/// that source's two values passed in so it is testable without touching the
+/// process environment.
+fn pair_trackio_connection(
+    raw_url: &str,
+    same_source_token: Option<String>,
+) -> (String, Option<String>) {
+    let (url, embedded) = split_trackio_write_token(raw_url);
+    (url, same_source_token.or(embedded))
+}
+
+/// The configured Trackio server, or `None` when tracking is switched off.
+/// Everything Trackio-shaped in orx keys off this being set.
+pub fn trackio_server_url() -> Option<String> {
+    Some(trackio_connection()?.0)
+}
+
+/// The configured default Trackio project, if any.
+pub fn trackio_project() -> Option<String> {
+    env_or_synced(TRACKIO_PROJECT)
+}
+
+/// The write token belonging to the resolved server, if any. Never log, print
+/// or persist the result.
+pub fn trackio_write_token() -> Option<String> {
+    trackio_connection()?.1
+}
+
+/// Split a `write_token` query parameter out of a Trackio server URL, returning
+/// the bare URL and the token.
+///
+/// `trackio show` prints exactly one write-access URL — `http://host:7860/?write_token=…`
+/// — so that is what users paste. Keeping the token inside the URL would leak it
+/// into the unmasked URL field, into every dashboard link and into anything that
+/// echoes the server address, so it is stored under [`TRACKIO_WRITE_TOKEN`]
+/// instead.
+///
+/// The whole query string is dropped, not just the token. Trackio documents no
+/// other parameter on a server address, and everything downstream — `/version`,
+/// `/api/*`, the `?project=` dashboard link — is built by appending to this
+/// base, which a surviving query would turn into `…?project=demo/version`.
+pub fn split_trackio_write_token(url: &str) -> (String, Option<String>) {
+    let url = url.trim();
+    let Some((base, query)) = url.split_once('?') else {
+        return (url.to_string(), None);
+    };
+    let mut token = None;
+    for pair in query.split('&') {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        // A bare or empty `write_token` carries nothing; it is dropped with the
+        // rest rather than read as a configured token.
+        if key == "write_token" && !value.is_empty() {
+            token = Some(
+                urlencoding::decode(value)
+                    .unwrap_or(value.into())
+                    .into_owned(),
+            );
+        }
+    }
+    (base.to_string(), token)
+}
+
+/// The dashboard URL for a project on `server_url`.
+///
+/// Trackio's dashboard supports `project`, `metrics`, `sidebar`, `footer`,
+/// `xmin`, `xmax`, `smoothing` and `accordion` as query parameters — there is no
+/// per-run parameter, so this link is project-scoped by design.
+pub fn trackio_dashboard_url(server_url: &str, project: Option<&str>) -> String {
+    let base = server_url.trim().trim_end_matches('/');
+    match project.map(str::trim).filter(|p| !p.is_empty()) {
+        Some(project) => format!("{base}/?project={}", urlencoding::encode(project)),
+        None => format!("{base}/"),
+    }
+}
+
+/// The Trackio decision made for one launch. The write token is deliberately
+/// absent so this value is safe to persist as run provenance.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum TrackioLaunch {
+    Off,
+    Injected {
+        server_url: String,
+        project: Option<String>,
+        run: String,
+    },
+    Skipped {
+        reason: String,
+    },
+}
+
+/// Where an implicit TensorBoard log directory is safe for this backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TensorboardDefault {
+    /// A local run can use ORX's own data directory.
+    LocalData,
+    /// Slurm/SSH-style jobs run from `~/.orx/runs/<run>/repo`.
+    RemoteRunDirectory,
+    /// The backend has no stable filesystem layout; require an explicit path.
+    ExplicitOnly,
+    /// The backend cannot preserve event files after the run completes.
+    Unavailable(&'static str),
+}
+
+impl TrackioLaunch {
+    /// Persist only the injected public destination. Off/skipped launches have
+    /// no tracking link, and the write token is never part of the record.
+    pub fn descriptor(&self) -> Option<crate::jobs::TrackingDescriptor> {
+        match self {
+            Self::Injected {
+                server_url,
+                project,
+                run,
+            } => Some(crate::jobs::TrackingDescriptor::Trackio {
+                server_url: server_url.clone(),
+                project: project.clone(),
+                run: run.clone(),
+            }),
+            Self::Off | Self::Skipped { .. } => None,
+        }
+    }
+}
+
+/// The Trackio variables a run should be launched with, plus the decision.
+///
+/// Empty when no server is configured, so an unconfigured project launches
+/// exactly the environment it did before.
+///
+/// The three settings usually arrive in the run env anyway, via
+/// [`list_synced_env`], but only with the values in the file. Resolving them
+/// here means a variable exported into orx's own environment — which already
+/// wins for the dashboard link and the reachability probe — reaches the run too,
+/// instead of the run silently logging somewhere else. The address is the
+/// normalised one, with any embedded write token moved to its own variable.
+pub fn trackio_run_env_with_launch(
+    run_id: &str,
+    remote: bool,
+) -> (Vec<(&'static str, String)>, TrackioLaunch) {
+    let Some(server_url) = trackio_server_url() else {
+        return (Vec::new(), TrackioLaunch::Off);
+    };
+    trackio_run_env_for(
+        &server_url,
+        trackio_project().as_deref(),
+        trackio_write_token().as_deref(),
+        run_id,
+        remote,
+    )
+}
+
+fn trackio_run_env_for(
+    server_url: &str,
+    project: Option<&str>,
+    token: Option<&str>,
+    run_id: &str,
+    remote: bool,
+) -> (Vec<(&'static str, String)>, TrackioLaunch) {
+    if remote && is_local_only_trackio_url(server_url) {
+        return (
+            Vec::new(),
+            TrackioLaunch::Skipped {
+                reason: format!(
+                    "configured server {server_url} is local-only and cannot be reached by a remote backend; submitting without Trackio"
+                ),
+            },
+        );
+    }
+    let mut out = vec![
+        (TRACKIO_SERVER_URL, server_url.to_string()),
+        (TRACKIO_RUN, run_id.to_string()),
+    ];
+    if let Some(project) = project {
+        out.push((TRACKIO_PROJECT, project.to_string()));
+    }
+    if let Some(token) = token {
+        out.push((TRACKIO_WRITE_TOKEN, token.to_string()));
+    }
+    (
+        out,
+        TrackioLaunch::Injected {
+            server_url: server_url.to_string(),
+            project: project.map(str::to_string),
+            run: run_id.to_string(),
+        },
+    )
+}
+
+pub(crate) fn is_local_only_trackio_url(server_url: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(server_url) else {
+        return false;
+    };
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let host = host
+        .trim_end_matches('.')
+        .trim_start_matches('[')
+        .trim_end_matches(']');
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback() || address.is_unspecified())
+}
+
+pub fn announce_trackio_launch(launch: &TrackioLaunch) {
+    if let TrackioLaunch::Skipped { reason } = launch {
+        eprintln!("Trackio: {reason}.");
+    }
+}
+
+fn align_trackio_launch_with_env(
+    launch: &mut TrackioLaunch,
+    env: &std::collections::HashMap<String, String>,
+) {
+    if let TrackioLaunch::Injected { run, .. } = launch {
+        if let Some(final_run) = env.get(TRACKIO_RUN) {
+            *run = final_run.clone();
+        }
+    }
+}
+
+fn run_env_from(
+    synced: Vec<(String, String)>,
+    run_id: &str,
+    project_id: &str,
+    tensorboard: bool,
+    remote: bool,
+    tensorboard_default: TensorboardDefault,
+) -> Result<(
+    std::collections::HashMap<String, String>,
+    Vec<crate::jobs::TrackingDescriptor>,
+)> {
+    let mut env = synced.into_iter().collect();
+    let (vars, mut launch) = trackio_run_env_with_launch(run_id, remote);
+    apply_trackio_vars(&mut env, &vars, remote);
+    align_trackio_launch_with_env(&mut launch, &env);
+    announce_trackio_launch(&launch);
+    let mut tracking: Vec<_> = launch.descriptor().into_iter().collect();
+    if let Some(record) = apply_tensorboard(
+        &mut env,
+        project_id,
+        run_id,
+        tensorboard,
+        tensorboard_default,
+    )? {
+        tracking.push(record);
+    }
+    Ok((env, tracking))
+}
+
+/// Resolve the complete environment for a run. This is the only public path
+/// from the synced env file into compute backends, so a new backend cannot
+/// accidentally bypass the Trackio decision.
+pub fn run_env(
+    run_id: &str,
+    project_id: &str,
+    tensorboard: bool,
+    remote: bool,
+    tensorboard_default: TensorboardDefault,
+) -> Result<(
+    std::collections::HashMap<String, String>,
+    Vec<crate::jobs::TrackingDescriptor>,
+)> {
+    run_env_from(
+        list_synced_env(),
+        run_id,
+        project_id,
+        tensorboard,
+        remote,
+        tensorboard_default,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn run_env_from_file(
+    path: &std::path::Path,
+    run_id: &str,
+    project_id: &str,
+    tensorboard: bool,
+    remote: bool,
+) -> Result<(
+    std::collections::HashMap<String, String>,
+    Vec<crate::jobs::TrackingDescriptor>,
+)> {
+    run_env_from(
+        list_synced_env_from(path),
+        run_id,
+        project_id,
+        tensorboard,
+        remote,
+        TensorboardDefault::RemoteRunDirectory,
+    )
+}
+
+fn tracking_segment(value: &str) -> String {
+    let cleaned: String = value
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_') {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    cleaned.trim_matches('-').to_string()
+}
+
+/// Add TensorBoard's file-only launch contract. An explicitly synced
+/// `TENSORBOARD_LOGDIR` opts in even without `--tracking tensorboard`; the CLI
+/// flag supplies the stable project/run default.
+pub fn apply_tensorboard(
+    env: &mut std::collections::HashMap<String, String>,
+    project_id: &str,
+    run_id: &str,
+    requested: bool,
+    default: TensorboardDefault,
+) -> Result<Option<crate::jobs::TrackingDescriptor>> {
+    let configured = env.get(TENSORBOARD_LOGDIR).cloned();
+    if let TensorboardDefault::Unavailable(reason) = default {
+        if requested || configured.is_some() {
+            return Err(crate::error::anyhow!(
+                "TensorBoard is unavailable: {reason}."
+            ));
+        }
+        return Ok(None);
+    }
+    if !requested && configured.is_none() {
+        return Ok(None);
+    }
+    let project = tracking_segment(project_id);
+    let run = tracking_segment(run_id);
+    let (log_dir, root_log_dir) = match configured {
+        Some(log_dir) => {
+            if !std::path::Path::new(&log_dir).is_absolute() && !log_dir.starts_with("~/") {
+                return Err(crate::error::anyhow!(
+                    "TENSORBOARD_LOGDIR must be an absolute path or start with ~/ so its recorded viewer command is stable."
+                ));
+            }
+            let root_log_dir = std::path::Path::new(&log_dir)
+                .parent()
+                .map(|path| path.to_string_lossy().into_owned())
+                .filter(|path| !path.is_empty())
+                .unwrap_or_else(|| log_dir.clone());
+            (log_dir, root_log_dir)
+        }
+        None => match default {
+            TensorboardDefault::LocalData => {
+                let root = crate::store::data_dir().join("tensorboard").join(&project);
+                let log_dir = root.join(&run).to_string_lossy().into_owned();
+                (log_dir, root.to_string_lossy().into_owned())
+            }
+            TensorboardDefault::RemoteRunDirectory => (
+                format!("../../../tensorboard/{project}/{run}"),
+                format!("~/.orx/tensorboard/{project}"),
+            ),
+            TensorboardDefault::ExplicitOnly => {
+                return Err(crate::error::anyhow!(
+                    "TensorBoard was requested, but this backend has no stable run-directory default. Set TENSORBOARD_LOGDIR explicitly before submitting."
+                ));
+            }
+            TensorboardDefault::Unavailable(_) => unreachable!("handled above"),
+        },
+    };
+    env.insert(TENSORBOARD_LOGDIR.to_string(), log_dir.clone());
+    Ok(Some(crate::jobs::TrackingDescriptor::Tensorboard {
+        log_dir,
+        root_log_dir,
+        run: run_id.to_string(),
+    }))
+}
+
+/// Reconstruct a delayed launch from its persisted public destinations. This
+/// is used by provision-then-launch backends so a settings change cannot
+/// repoint an existing run. A Trackio token is reattached only when the current
+/// secret still belongs to the recorded server.
+pub fn run_env_for_tracking(
+    tracking: &[crate::jobs::TrackingDescriptor],
+    remote: bool,
+) -> std::collections::HashMap<String, String> {
+    let mut env: std::collections::HashMap<_, _> = list_synced_env().into_iter().collect();
+    for key in [
+        TRACKIO_SERVER_URL,
+        TRACKIO_PROJECT,
+        TRACKIO_RUN,
+        TRACKIO_WRITE_TOKEN,
+        TENSORBOARD_LOGDIR,
+    ] {
+        env.remove(key);
+    }
+    for record in tracking {
+        match record {
+            crate::jobs::TrackingDescriptor::Trackio {
+                server_url,
+                project,
+                run,
+            } if !(remote && is_local_only_trackio_url(server_url)) => {
+                env.insert(TRACKIO_SERVER_URL.to_string(), server_url.clone());
+                env.insert(TRACKIO_RUN.to_string(), run.clone());
+                if let Some(project) = project {
+                    env.insert(TRACKIO_PROJECT.to_string(), project.clone());
+                }
+                if trackio_server_url().as_deref() == Some(server_url.as_str()) {
+                    if let Some(token) = trackio_write_token() {
+                        env.insert(TRACKIO_WRITE_TOKEN.to_string(), token);
+                    }
+                }
+            }
+            crate::jobs::TrackingDescriptor::Tensorboard { log_dir, .. } => {
+                env.insert(TENSORBOARD_LOGDIR.to_string(), log_dir.clone());
+            }
+            _ => {}
+        }
+    }
+    env
+}
+
+/// Apply [`trackio_run_env`] to a run's environment map.
+///
+/// An explicit `TRACKIO_RUN` already in the map is left alone; the rest are
+/// overwritten, because the resolved value is the one the link and the probe
+/// used and a run pointed somewhere else is worse than no tracking at all.
+/// Merge resolved Trackio variables into a run environment, with the values
+/// passed in so the behavior is testable without touching process state.
+fn apply_trackio_vars(
+    env: &mut std::collections::HashMap<String, String>,
+    vars: &[(&'static str, String)],
+    remote: bool,
+) {
+    if remote {
+        for key in [
+            TRACKIO_SERVER_URL,
+            TRACKIO_PROJECT,
+            TRACKIO_RUN,
+            TRACKIO_WRITE_TOKEN,
+        ] {
+            env.remove(key);
+        }
+    }
+    for (key, value) in vars {
+        if *key == TRACKIO_RUN {
+            env.entry(key.to_string()).or_insert_with(|| value.clone());
+        } else {
+            env.insert(key.to_string(), value.clone());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn split_trackio_write_token_extracts_the_token_and_bares_the_url() {
+        let (url, token) = split_trackio_write_token("http://127.0.0.1:7860/?write_token=s3cret");
+        assert_eq!(url, "http://127.0.0.1:7860/");
+        assert_eq!(token.as_deref(), Some("s3cret"));
+    }
+
+    #[test]
+    fn split_trackio_write_token_drops_the_whole_query_string() {
+        let (url, token) =
+            split_trackio_write_token("https://trackio.example/?project=demo&write_token=abc%2F1");
+        // Not `…/?project=demo`: every endpoint is built by appending to this
+        // base, so a surviving query yields `…?project=demo/version`.
+        assert_eq!(url, "https://trackio.example/");
+        // Percent-encoded token values are decoded before storage.
+        assert_eq!(token.as_deref(), Some("abc/1"));
+    }
+
+    #[test]
+    fn split_trackio_write_token_leaves_a_plain_url_alone() {
+        let (url, token) = split_trackio_write_token("  http://127.0.0.1:7860  ");
+        assert_eq!(url, "http://127.0.0.1:7860");
+        assert_eq!(token, None);
+    }
+
+    #[test]
+    fn split_trackio_write_token_drops_an_empty_token_parameter() {
+        let (url, token) = split_trackio_write_token("http://h:7860/?write_token=");
+        assert_eq!(url, "http://h:7860/");
+        assert_eq!(token, None);
+    }
+
+    #[test]
+    fn trackio_dashboard_url_is_project_scoped_and_encodes_the_name() {
+        assert_eq!(
+            trackio_dashboard_url("http://127.0.0.1:7860/", Some("my exp")),
+            "http://127.0.0.1:7860/?project=my%20exp"
+        );
+        assert_eq!(
+            trackio_dashboard_url("http://127.0.0.1:7860", None),
+            "http://127.0.0.1:7860/"
+        );
+        // A blank project is the same as none, not `?project=`.
+        assert_eq!(
+            trackio_dashboard_url("http://127.0.0.1:7860", Some("  ")),
+            "http://127.0.0.1:7860/"
+        );
+    }
+
+    #[test]
+    fn a_connection_pairs_its_url_with_its_own_source_token() {
+        // A standalone token from the same source is the more explicit of the
+        // two, so it wins over one embedded in that source's URL.
+        assert_eq!(
+            pair_trackio_connection("http://h:7860/?write_token=embedded", Some("own".into())),
+            ("http://h:7860/".to_string(), Some("own".to_string()))
+        );
+        // With no standalone token, the URL's own token is the connection's.
+        assert_eq!(
+            pair_trackio_connection("http://h:7860/?write_token=embedded", None),
+            ("http://h:7860/".to_string(), Some("embedded".to_string()))
+        );
+        // A bare URL and no token is an unauthenticated connection, not an
+        // opportunity to reach for some other source's credential.
+        assert_eq!(
+            pair_trackio_connection("http://h:7860", None),
+            ("http://h:7860".to_string(), None)
+        );
+    }
+
+    fn configured() -> Vec<(&'static str, String)> {
+        vec![
+            (TRACKIO_SERVER_URL, "http://127.0.0.1:7860".to_string()),
+            (TRACKIO_RUN, "run-1".to_string()),
+            (TRACKIO_PROJECT, "demo".to_string()),
+            (TRACKIO_WRITE_TOKEN, "tok".to_string()),
+        ]
+    }
+
+    #[test]
+    fn an_unconfigured_run_env_is_left_exactly_as_it_was() {
+        let mut env =
+            std::collections::HashMap::from([("HF_TOKEN".to_string(), "hf_x".to_string())]);
+        apply_trackio_vars(&mut env, &[], false);
+        assert_eq!(
+            env,
+            std::collections::HashMap::from([("HF_TOKEN".to_string(), "hf_x".to_string())])
+        );
+    }
+
+    #[test]
+    fn a_configured_run_env_gets_every_resolved_variable() {
+        let mut env = std::collections::HashMap::new();
+        apply_trackio_vars(&mut env, &configured(), false);
+        assert_eq!(
+            env,
+            std::collections::HashMap::from([
+                (
+                    TRACKIO_SERVER_URL.to_string(),
+                    "http://127.0.0.1:7860".to_string()
+                ),
+                (TRACKIO_RUN.to_string(), "run-1".to_string()),
+                (TRACKIO_PROJECT.to_string(), "demo".to_string()),
+                (TRACKIO_WRITE_TOKEN.to_string(), "tok".to_string()),
+            ])
+        );
+    }
+
+    #[test]
+    fn trackio_umbrella_tensorboard_defaults_to_a_project_root_and_run_directory() {
+        let mut env = std::collections::HashMap::new();
+        let record = apply_tensorboard(
+            &mut env,
+            "project 1",
+            "run/1",
+            true,
+            TensorboardDefault::RemoteRunDirectory,
+        )
+        .expect("TensorBoard default should resolve")
+        .unwrap();
+        assert_eq!(
+            env,
+            std::collections::HashMap::from([(
+                TENSORBOARD_LOGDIR.to_string(),
+                "../../../tensorboard/project-1/run-1".to_string(),
+            )])
+        );
+        assert_eq!(
+            record,
+            crate::jobs::TrackingDescriptor::Tensorboard {
+                log_dir: "../../../tensorboard/project-1/run-1".to_string(),
+                root_log_dir: "~/.orx/tensorboard/project-1".to_string(),
+                run: "run/1".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn trackio_umbrella_tensorboard_preserves_an_explicit_log_directory() {
+        let mut env = std::collections::HashMap::from([(
+            TENSORBOARD_LOGDIR.to_string(),
+            "/shared/tensorboard/demo/run-1".to_string(),
+        )]);
+        let record = apply_tensorboard(
+            &mut env,
+            "project",
+            "run-1",
+            false,
+            TensorboardDefault::ExplicitOnly,
+        )
+        .expect("explicit TensorBoard path should resolve")
+        .unwrap();
+        assert_eq!(
+            record,
+            crate::jobs::TrackingDescriptor::Tensorboard {
+                log_dir: "/shared/tensorboard/demo/run-1".to_string(),
+                root_log_dir: "/shared/tensorboard/demo".to_string(),
+                run: "run-1".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn trackio_umbrella_tensorboard_rejects_a_relative_explicit_log_directory() {
+        let mut env = std::collections::HashMap::from([(
+            TENSORBOARD_LOGDIR.to_string(),
+            "logs/tensorboard/run-1".to_string(),
+        )]);
+        let error = apply_tensorboard(
+            &mut env,
+            "project",
+            "run-1",
+            false,
+            TensorboardDefault::ExplicitOnly,
+        )
+        .expect_err("relative paths cannot produce stable viewer commands");
+        assert!(error.to_string().contains("must be an absolute path"));
+    }
+
+    #[test]
+    fn resolved_settings_win_over_the_synced_file_but_an_explicit_run_name_does_not() {
+        // The synced file's values are already in the map when this runs. The
+        // address, project and token are replaced by the resolved ones — the
+        // values the dashboard link and the probe used — so a run cannot end up
+        // logging somewhere other than where the UI points. TRACKIO_RUN is the
+        // exception: a name the user set deliberately is theirs.
+        let mut env = std::collections::HashMap::from([
+            (
+                TRACKIO_SERVER_URL.to_string(),
+                "http://stale:7860".to_string(),
+            ),
+            (TRACKIO_PROJECT.to_string(), "stale".to_string()),
+            (TRACKIO_RUN.to_string(), "mine".to_string()),
+        ]);
+        apply_trackio_vars(&mut env, &configured(), false);
+        assert_eq!(
+            env,
+            std::collections::HashMap::from([
+                (
+                    TRACKIO_SERVER_URL.to_string(),
+                    "http://127.0.0.1:7860".to_string()
+                ),
+                (TRACKIO_RUN.to_string(), "mine".to_string()),
+                (TRACKIO_PROJECT.to_string(), "demo".to_string()),
+                (TRACKIO_WRITE_TOKEN.to_string(), "tok".to_string()),
+            ])
+        );
+    }
+
+    #[test]
+    fn trackio_umbrella_provenance_uses_the_final_explicit_run_name() {
+        let mut env =
+            std::collections::HashMap::from([(TRACKIO_RUN.to_string(), "mine".to_string())]);
+        let (vars, mut launch) = trackio_run_env_for(
+            "https://trackio.example",
+            Some("demo"),
+            Some("tok"),
+            "generated",
+            false,
+        );
+        apply_trackio_vars(&mut env, &vars, false);
+        align_trackio_launch_with_env(&mut launch, &env);
+        assert_eq!(env.get(TRACKIO_RUN).map(String::as_str), Some("mine"));
+        assert_eq!(
+            launch.descriptor(),
+            Some(crate::jobs::TrackingDescriptor::Trackio {
+                server_url: "https://trackio.example".to_string(),
+                project: Some("demo".to_string()),
+                run: "mine".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn trackio_umbrella_tensorboard_requires_an_explicit_path_without_a_stable_layout() {
+        let mut env = std::collections::HashMap::new();
+        let error = apply_tensorboard(
+            &mut env,
+            "project",
+            "run-1",
+            true,
+            TensorboardDefault::ExplicitOnly,
+        )
+        .expect_err("an explicit-only backend must reject a missing path");
+        assert!(error
+            .to_string()
+            .contains("Set TENSORBOARD_LOGDIR explicitly"));
+        assert!(!env.contains_key(TENSORBOARD_LOGDIR));
+    }
+
+    #[test]
+    fn trackio_umbrella_tensorboard_rejects_ephemeral_backends() {
+        let mut env = std::collections::HashMap::new();
+        let error = apply_tensorboard(
+            &mut env,
+            "project",
+            "run-1",
+            true,
+            TensorboardDefault::Unavailable("event files are deleted at teardown"),
+        )
+        .expect_err("ephemeral backend must reject TensorBoard");
+        assert_eq!(
+            error.to_string(),
+            "TensorBoard is unavailable: event files are deleted at teardown."
+        );
+        assert!(!env.contains_key(TENSORBOARD_LOGDIR));
+    }
+
+    #[test]
+    fn a_local_only_trackio_connection_is_not_sent_to_a_remote_run() {
+        for url in [
+            "http://127.0.0.1:7860",
+            "http://[::1]:7860",
+            "http://0.0.0.0:7860",
+            "http://[::]:7860",
+        ] {
+            let (vars, launch) = trackio_run_env_for(url, Some("demo"), Some("tok"), "run-1", true);
+            assert!(vars.is_empty());
+            assert!(matches!(launch, TrackioLaunch::Skipped { .. }));
+        }
+    }
+
+    #[test]
+    fn a_remote_loopback_run_removes_preloaded_trackio_variables() {
+        let mut env = std::collections::HashMap::from([
+            ("HF_TOKEN".to_string(), "hf_x".to_string()),
+            (
+                TRACKIO_SERVER_URL.to_string(),
+                "http://127.0.0.1:7860".to_string(),
+            ),
+            (TRACKIO_PROJECT.to_string(), "stale".to_string()),
+            (TRACKIO_RUN.to_string(), "stale-run".to_string()),
+            (TRACKIO_WRITE_TOKEN.to_string(), "stale-token".to_string()),
+        ]);
+        apply_trackio_vars(&mut env, &[], true);
+        assert_eq!(
+            env,
+            std::collections::HashMap::from([("HF_TOKEN".to_string(), "hf_x".to_string())])
+        );
+    }
 }
