@@ -58,6 +58,7 @@ import {
   fmtBytes,
   fmtDuration,
   fmtNumber,
+  getTrackioSettings,
   setComputeDefault,
   setProjectDefaults,
   setTelemetry,
@@ -80,6 +81,9 @@ import {
   rayPreflight,
   runDisplayStatus,
   timeAgo,
+  trackioPreflight,
+  type TrackioPreflight,
+  type TrackioSettings,
   type ComputeSettings,
   type ComputeTargetId,
   type ComputeTargetSummary,
@@ -2301,36 +2305,101 @@ function HfHintRow() {
 }
 
 // Keys runs typically need (HF_TOKEN is also read by orx itself), always
-// shown as rows alongside custom variables.
-const RECOMMENDED_ENV_KEYS = ["TINKER_API_KEY", "HF_TOKEN", "WANDB_API_KEY"];
+// shown as rows alongside custom variables. The three TRACKIO_ keys are the
+// whole configuration surface for a self-hosted Trackio server: orx passes them
+// to every run, so tracking is set up here and nowhere else.
+const TRACKIO_SERVER_URL_KEY = "TRACKIO_SERVER_URL";
+const TRACKIO_PROJECT_KEY = "TRACKIO_PROJECT";
+const TENSORBOARD_LOGDIR_KEY = "TENSORBOARD_LOGDIR";
+const RECOMMENDED_ENV_KEYS = [
+  "TINKER_API_KEY",
+  "HF_TOKEN",
+  "WANDB_API_KEY",
+  TRACKIO_SERVER_URL_KEY,
+  TRACKIO_PROJECT_KEY,
+  "TRACKIO_WRITE_TOKEN",
+  TENSORBOARD_LOGDIR_KEY,
+];
+
+// Keys whose values carry no credential, so they are typed and shown in the
+// clear. Mirrors `env_value_is_secret` on the server, which is authoritative
+// for a key already stored; this list only decides the input type for one that
+// isn't set yet.
+const PLAIN_ENV_KEYS = [TRACKIO_SERVER_URL_KEY, TRACKIO_PROJECT_KEY, TENSORBOARD_LOGDIR_KEY];
+
+/** The Trackio reachability result, under the server URL row. */
+function TrackioProbeRow({ probe }: { probe: TrackioPreflight | "checking" }) {
+  const version =
+    probe !== "checking" && probe.version != null
+      ? ltr(probe.version)
+      : m.settings_trackio_unknown_version();
+  const text =
+    probe === "checking"
+      ? m.common_checking()
+      : probe.error
+        ? probe.error
+        : probe.writeAccess === false
+          ? m.settings_trackio_write_rejected({ version, variable: ltr("TRACKIO_WRITE_TOKEN") })
+          : probe.writeAccess
+            ? m.settings_trackio_write_allowed({ version })
+            : m.settings_trackio_write_unknown({ version });
+  return (
+    <tr>
+      {/* colSpan tracks the EnvRow/AddVarRow column count */}
+      <td colSpan={3}>
+        <p dir="auto" className="settings-note">{text}</p>
+      </td>
+    </tr>
+  );
+}
 
 function showEnvError(name: string, err: unknown) {
   const message = err instanceof Error ? err.message : String(err);
   showAlert(message.includes(name) ? message : `${name}: ${message}`, "error");
 }
 
-/** One variable row. Set: masked value + delete. Unset: inline value input. */
+/**
+ * One variable row. A secret shows masked once set and is replaced by deleting
+ * it; a non-secret one (a Trackio server address or project name) stays an
+ * editable field, because a value you cannot read is a value you cannot check.
+ */
 function EnvRow({
   name,
   entry,
   onVars,
+  onTested,
 }: {
   name: string;
   entry: EnvVar | undefined;
   onVars: (vars: EnvVar[]) => void;
+  /** Called when Test runs, so the section can drop its load-time reason. */
+  onTested?: () => void;
 }) {
   const setEnvVarMutation = useMutation({ mutationFn: (args: Parameters<typeof setEnvVar>) => setEnvVar(...args) });
   const deleteEnvVarMutation = useMutation({ mutationFn: deleteEnvVar });
 
-  const [value, setValue] = useState("");
+  // A set non-secret seeds the field with its current value, so the input is an
+  // edit rather than a retype. Re-seeded whenever the stored value changes.
+  const stored = entry?.value ?? "";
+  const [value, setValue] = useState(stored);
   const [saving, setSaving] = useState(false);
+  const [probe, setProbe] = useState<TrackioPreflight | "checking" | null>(null);
+  useEffect(() => setValue(stored), [stored]);
+
+  // Whether this value is shown in the clear. The server decides for a key it
+  // already stores; for one not set yet, the same two keys are plain here so
+  // the field for a URL isn't a password box.
+  const plain = entry ? !entry.secret : PLAIN_ENV_KEYS.includes(name);
+  const dirty = value.trim() !== stored;
 
   async function save() {
     if (!value.trim() || saving) return;
     setSaving(true);
     try {
       onVars(await setEnvVarMutation.mutateAsync([name, value.trim()]));
-      setValue("");
+      // A secret clears the field after saving (it is masked from here on); a
+      // plain one keeps showing what was stored, re-seeded from the fresh list.
+      if (!plain) setValue("");
     } catch (err) {
       showEnvError(name, err);
     } finally {
@@ -2343,10 +2412,26 @@ function EnvRow({
     setSaving(true);
     try {
       onVars(await deleteEnvVarMutation.mutateAsync(name));
+      setValue("");
     } catch (err) {
       showEnvError(name, err);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function test() {
+    onTested?.();
+    setProbe("checking");
+    try {
+      setProbe(await trackioPreflight());
+    } catch (err) {
+      setProbe({
+        reachable: false,
+        version: null,
+        writeAccess: null,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
@@ -2355,53 +2440,63 @@ function EnvRow({
       <tr>
         <td className="font-mono text-sm">{name}</td>
         <td className="text-base text-subtext">
-          {entry ? (
+          {entry && !plain ? (
             <>
               {entry.maskedValue}
               {entry.inProcessEnv && <Badge>{m.settings_page_overridden_by_env()}</Badge>}
             </>
           ) : (
-            <Input
-              variant="inline"
-              className="text-base"
-              type="password"
-              value={value}
-              onChange={(e) => setValue(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  void save();
-                }
-                if (e.key === "Escape" && !saving) setValue("");
-              }}
-              placeholder={m.settings_page_value()}
-              aria-label={m.a11y_value_for({ name: ltr(name) })}
-              autoComplete="new-password"
-              disabled={saving}
-            />
+            <>
+              <Input
+                variant="inline"
+                className="text-base"
+                type={plain ? "text" : "password"}
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void save();
+                  }
+                  if (e.key === "Escape" && !saving) setValue(stored);
+                }}
+                placeholder={m.settings_page_value()}
+                aria-label={m.a11y_value_for({ name: ltr(name) })}
+                autoComplete="new-password"
+                disabled={saving}
+              />
+              {entry?.inProcessEnv && <Badge>{m.settings_page_overridden_by_env()}</Badge>}
+            </>
           )}
         </td>
         <td>
-          {entry ? (
-            <IconButton
-              className="[&:hover:not(:disabled)]:text-accent-red"
-              title={m.a11y_delete_item({ name: ltr(name) })}
-              aria-label={m.a11y_delete_item({ name: ltr(name) })}
-              onClick={() => void remove()}
-              disabled={saving}
-            >
-              <Trash2 size={13} />
-            </IconButton>
-          ) : (
-            value.trim() && (
+          <span className="inline-flex items-center gap-1">
+            {name === TRACKIO_SERVER_URL_KEY && entry && !dirty && (
+              <Button size="small" onClick={() => void test()} disabled={saving}>
+                {m.settings_trackio_test()}
+              </Button>
+            )}
+            {(dirty || (!entry && value.trim())) && value.trim() && (
               <Button size="small" onClick={() => void save()} disabled={saving}>
                 {saving ? m.common_saving() : m.common_save()}
               </Button>
-            )
-          )}
+            )}
+            {entry && (
+              <IconButton
+                className="[&:hover:not(:disabled)]:text-accent-red"
+                title={m.a11y_delete_item({ name: ltr(name) })}
+                aria-label={m.a11y_delete_item({ name: ltr(name) })}
+                onClick={() => void remove()}
+                disabled={saving}
+              >
+                <Trash2 size={13} />
+              </IconButton>
+            )}
+          </span>
         </td>
       </tr>
       {!entry && name !== "HF_TOKEN" && HF_TOKEN_RE.test(value.trim()) && <HfHintRow />}
+      {probe && <TrackioProbeRow probe={probe} />}
     </>
   );
 }
@@ -2505,6 +2600,20 @@ function EnvVarsSection() {
   };
   const loadError = vars ? null : varsQuery.error?.message ?? null;
   const [adding, setAdding] = useState(false);
+  const [trackio, setTrackio] = useState<TrackioSettings | null>(null);
+  // After Test, the row's own result replaces the reason shown on load.
+  const [trackioTested, setTrackioTested] = useState(false);
+
+  useEffect(() => {
+    getTrackioSettings().then(setTrackio).catch(() => setTrackio(null));
+  }, []);
+
+  // Every mutation returns the fresh full list; a changed TRACKIO_ key also
+  // changes the Trackio health verdict shown on this settings card.
+  const applyVars = (v: EnvVar[]) => {
+    setVars(v);
+    getTrackioSettings().then(setTrackio).catch(() => setTrackio(null));
+  };
 
   // Recommended keys first (fixed order), then custom variables in file order.
   const customKeys =
@@ -2525,6 +2634,32 @@ function EnvVarsSection() {
         </Button>
       </div>
       <div className={SETTINGS_CARD_CLASS_NAME}>
+        <p className="settings-sub">
+          {m.settings_trackio_intro_before_link({ prefix: ltr("TRACKIO_") })}{" "}
+          <a
+            className="text-inherit underline"
+            href="https://huggingface.co/docs/trackio/self_hosted_server"
+            target="_blank"
+            rel="noreferrer"
+          >
+            {m.settings_trackio_server_link()}
+          </a>{" "}
+          {m.settings_trackio_intro_after_link()}{" "}
+          {m.settings_trackio_remote_help({
+            command: ltr("trackio show"),
+            variable: ltr("TRACKIO_WRITE_TOKEN"),
+            address: ltr("127.0.0.1"),
+          })}
+        </p>
+        {trackio?.serverUrl && trackio.reason && !trackioTested && (
+          <p dir="auto" className={SETTINGS_NOTE_CLASS_NAME}>{trackio.reason}</p>
+        )}
+        <p className="settings-sub">
+          {m.settings_tensorboard_help({
+            flag: ltr("--tracking tensorboard"),
+            variable: ltr("TENSORBOARD_LOGDIR"),
+          })}
+        </p>
         {loadError ? (
           <div className="error">{loadError}</div>
         ) : vars === null ? (
@@ -2539,11 +2674,12 @@ function EnvVarsSection() {
                   key={name}
                   name={name}
                   entry={vars.find((v) => v.key === name)}
-                  onVars={setVars}
+                  onVars={applyVars}
+                  onTested={name === TRACKIO_SERVER_URL_KEY ? () => setTrackioTested(true) : undefined}
                 />
               ))}
               {adding && (
-                <AddVarRow onVars={setVars} onDone={() => setAdding(false)} />
+                <AddVarRow onVars={applyVars} onDone={() => setAdding(false)} />
               )}
             </tbody>
           </table>

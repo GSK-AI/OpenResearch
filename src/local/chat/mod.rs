@@ -8659,7 +8659,7 @@ pub fn prepare_env(cmd: &mut tokio::process::Command) {
     });
     // Agents open browsers and editors themselves.
     crate::local::shell_env::restore_host_gui_env(cmd.as_std_mut());
-    for (key, value) in crate::config::list_synced_env() {
+    for (key, value) in crate::config::agent_env() {
         if crate::local::shell_env::var(&key).is_none() {
             cmd.env(key, value);
         }
@@ -8790,7 +8790,7 @@ fn bash_env_hook(original: Option<String>) -> String {
 
 fn child_env_value(key: &str) -> Option<std::ffi::OsString> {
     std::env::var_os(key).or_else(|| {
-        crate::config::list_synced_env()
+        crate::config::agent_env()
             .into_iter()
             .find_map(|(candidate, value)| (candidate == key).then(|| value.into()))
     })
