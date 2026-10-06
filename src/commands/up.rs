@@ -497,6 +497,7 @@ fn router(state: AppState, remote_auth: Option<RemoteAuth>) -> Router {
         .route("/api/onboarding/complete", post(complete_onboarding))
         .route("/api/project-path/status", get(project_path_status))
         .route("/api/project-path/pick", post(pick_project_folder))
+        .route("/api/git/install", post(install_git))
         .route("/api/projects", get(list_projects).post(create_project))
         .route(
             "/api/projects/starter-prompts/prewarm",
@@ -837,6 +838,7 @@ fn remote_route_forbidden(path: &str) -> bool {
     matches!(
         path,
         "/api/project-path/pick"
+            | "/api/git/install"
             | "/api/update"
             | "/api/update/apply"
             | "/api/update/restart"
@@ -1357,12 +1359,26 @@ struct ProjectPathStatusQ {
     path: Option<String>,
 }
 
+async fn install_git() -> ApiResult {
+    // Spawned, so a page reload mid-install cannot orphan the extractor.
+    tokio::spawn(local::portable_git::install())
+        .await
+        .map_err(|error| ApiError::from(anyhow!("Git install task failed: {error}")))?
+        // `:#` keeps the cause (DNS, TLS, proxy) behind the outer context.
+        .map_err(|error| {
+            eprintln!("orx up: Git install failed: {error:#}");
+            ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("{error:#}"))
+        })?;
+    Ok(Json(json!({})))
+}
+
 async fn project_path_status(Query(q): Query<ProjectPathStatusQ>) -> ApiResult {
     tokio::task::spawn_blocking(move || -> Result<Json<Value>> {
         let git_version = local::git::version();
         let Some(path) = q.path.filter(|path| !path.trim().is_empty()) else {
             return Ok(Json(json!({
                 "gitVersion": git_version,
+                "gitInstallable": cfg!(windows) && git_version.is_none(),
                 "resolvedPath": null,
                 "exists": null,
                 "directory": null,
