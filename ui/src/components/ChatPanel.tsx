@@ -2283,9 +2283,11 @@ function TurnStatusRow({
   recovering,
   onRecover,
   usageLimited = false,
+  temporaryApiError = false,
 }: {
   part: ChatPart;
   usageLimited?: boolean;
+  temporaryApiError?: boolean;
   busy: boolean;
   recovering: boolean;
   onRecover?: (turnId: string, action: "retry" | "continue") => void;
@@ -2317,7 +2319,8 @@ function TurnStatusRow({
   const turnId = input?.turnId;
   const label = isModelAccessLimitPart(part)
     ? m.chat_model_unavailable()
-    : usageLimited ? m.chat_session_limit_reached() : m.chat_turn_incomplete();
+    : usageLimited ? m.chat_session_limit_reached()
+    : temporaryApiError ? m.chat_panel_temporary_api_error() : m.chat_turn_incomplete();
   const Icon = usageLimited ? Gauge : TriangleAlert;
   const errorMessage = cleanToolError(part.state?.error || m.chat_turn_incomplete());
   return (
@@ -2959,7 +2962,7 @@ function ForkControls({
   );
 }
 
-const Message = memo(function Message({
+export const Message = memo(function Message({
   message,
   activePermissionId,
   pendingTailToolId,
@@ -3136,10 +3139,10 @@ const Message = memo(function Message({
   }
   const usageLimit = message.parts.find((part) => part.type === "tool" && isUsageLimitPart(part));
   const turnStatus = message.parts.find(isTurnStatusPart) ?? usageLimit;
-  const regularParts = withoutDuplicateTurnError(
-    message.parts.filter((part) => part !== turnStatus && !(usageLimit && isUsageLimitPart(part))),
-    turnStatus,
-  );
+  const turnParts = message.parts.filter((part) => part !== turnStatus && !(usageLimit && isUsageLimitPart(part)));
+  const regularParts = withoutDuplicateTurnError(turnParts, turnStatus);
+  // The recovery row absorbs a duplicate transient API error, so it carries that label.
+  const temporaryApiError = regularParts.length < turnParts.length && turnParts.at(-1)?.tool === "api_error";
   const copyText = predictTextTail && !message.completedAt ? "" : responseText(message);
   return (
     <div className="msg-assistant group/turn text-base leading-[1.62] text-text min-w-0">
@@ -3161,6 +3164,7 @@ const Message = memo(function Message({
         <TurnStatusRow
           part={turnStatus}
           usageLimited={Boolean(usageLimit)}
+          temporaryApiError={temporaryApiError}
           busy={busy}
           recovering={recoveringTurnId === turnStatus.state?.input?.turnId}
           onRecover={onRecover}
