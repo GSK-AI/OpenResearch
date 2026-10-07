@@ -2151,6 +2151,11 @@ async fn decode_local_response<T: serde::de::DeserializeOwned>(
                     .map(str::to_string)
             })
             .unwrap_or_else(|| String::from_utf8_lossy(&body).trim().to_string());
+        let detail = if detail.is_empty() {
+            format!("HTTP {status}")
+        } else {
+            detail
+        };
         if status.is_client_error() {
             return Err(anyhow!("{detail}"));
         }
@@ -2161,7 +2166,7 @@ async fn decode_local_response<T: serde::de::DeserializeOwned>(
 }
 
 fn local_client() -> Result<reqwest::Client> {
-    reqwest::Client::builder()
+    crate::net::loopback_client()
         .connect_timeout(Duration::from_secs(3))
         .build()
         .map_err(|error| anyhow!("Could not create the orx up client: {error}"))
@@ -8085,6 +8090,21 @@ pub(crate) async fn spa(uri: Uri) -> Response {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn empty_local_error_reports_the_http_status() {
+        let response = axum::http::Response::builder()
+            .status(StatusCode::BAD_GATEWAY)
+            .body(String::new())
+            .unwrap();
+        let error = decode_local_response::<Value>(response.into(), "start the run")
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "orx up could not start the run: HTTP 502 Bad Gateway"
+        );
+    }
+
     #[test]
     fn successful_recheck_clears_stale_claude_warning() {
         let host = local::claude::ClaudeHost::new();
@@ -8191,7 +8211,13 @@ mod tests {
         let url = format!("http://{}/file", listener.local_addr().unwrap());
         tokio::spawn(async move { axum::serve(listener, app).await });
 
-        let response = reqwest::get(url).await.unwrap();
+        let response = crate::net::loopback_client()
+            .build()
+            .unwrap()
+            .get(url)
+            .send()
+            .await
+            .unwrap();
         assert_eq!(ACTIVE.load(Ordering::SeqCst), 1);
         release.notify_one();
         assert_eq!(response.text().await.unwrap(), "done");
