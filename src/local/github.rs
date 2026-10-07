@@ -316,7 +316,8 @@ mod tests {
             Some("research-org"),
         )
         .to_string();
-        assert!(error.contains("research-org"));
+        // The settings page shows messages with this prefix verbatim.
+        assert!(error.starts_with("GitHub denied repository creation in 'research-org'"));
         assert!(error.contains("SAML SSO"));
         assert!(!error.contains("Could not reach"));
     }
