@@ -41,6 +41,7 @@ const {
   diffBaseOf,
   groupHistory,
   historyBackendLabel,
+  historyFit,
   historyJobId,
   laneCount,
   layoutChronological,
@@ -337,6 +338,56 @@ describe("layoutLineage", () => {
 
       assert.equal(rows.some((row) => row.kind === "collapsed"), false);
     });
+
+    test("leaves out of the fold a later experiment reached through another chapter, which starts its own root", () => {
+      const handedOff = [...tree, experiment("handoff", 11, "side-4", "session-b"), experiment("resumed", 12, "handoff")];
+      const nodes = buildHistoryNodes(handedOff, allDone([...ids, "handoff", "resumed"]));
+      const [own] = groupHistory(nodes, "task", () => undefined);
+
+      const rows = layoutLineage(own, { collapseFinished: true });
+
+      assert.deepEqual(rows.map((row) => (row.kind === "collapsed" ? ["collapsed", row.hidden.map((node) => node.id)] : [row.kind, row.node.id])), [
+        ["experiment", "p"],
+        ["collapsed", ["side", "side-2", "side-3", "side-4"]],
+        ["experiment", "main"],
+        ["experiment", "main-2"],
+        ["experiment", "main-3"],
+        ["experiment", "main-4"],
+        ["experiment", "main-5"],
+        ["lead-in", "resumed"],
+        ["experiment", "resumed"],
+      ]);
+    });
+  });
+});
+
+describe("historyFit", () => {
+  test("sets the open detail pane beside a wide list, which keeps its focus", () => {
+    assert.deepEqual(historyFit(1200, true, false), {
+      overlay: false,
+      listCovered: false,
+      whatChanged: true,
+      from: true,
+      runs: true,
+      chapterSummary: true,
+    });
+  });
+
+  test("covers a narrow list with the open detail pane and takes the list out of the focus order", () => {
+    assert.deepEqual([historyFit(900, true, false), historyFit(900, false, false)].map(({ overlay, listCovered }) => ({ overlay, listCovered })), [
+      { overlay: true, listCovered: true },
+      { overlay: true, listCovered: false },
+    ]);
+  });
+
+  test("keeps only the experiment and its status in a compact list, in any order", () => {
+    const compact = { overlay: true, listCovered: false, whatChanged: false, from: false, runs: false, chapterSummary: false };
+
+    assert.deepEqual([historyFit(400, false, false), historyFit(400, false, true)], [compact, compact]);
+  });
+
+  test("names the parent in a From column only outside lineage order", () => {
+    assert.deepEqual([historyFit(600, false, false).from, historyFit(600, false, true).from], [true, false]);
   });
 });
 

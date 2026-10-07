@@ -57,7 +57,7 @@ const model = load("components/experimentHistoryModel.ts", {
 const { load: loadQueries, client } = queryModules(api);
 const { listChatSessionsQuery } = loadQueries("chat");
 const icon = () => null;
-const { ExperimentDetail, ExperimentHistory } = load(
+const { ChapterHeader, ExperimentDetail, ExperimentHistory } = load(
   "components/ExperimentHistory.tsx",
   {
     "@tanstack/react-query": query,
@@ -72,7 +72,7 @@ const { ExperimentDetail, ExperimentHistory } = load(
   },
   { localStorage },
 );
-const { buildHistoryNodes } = model;
+const { buildHistoryNodes, groupHistory } = model;
 
 const project = { id: "project", name: "Example", baselineBranch: "trunk" };
 client.setQueryData(listChatSessionsQuery(project.id).queryKey, [
@@ -101,15 +101,32 @@ function run(experimentId, createdAt, status = "done") {
   return { id: "run-" + experimentId + createdAt, experimentId, projectId: project.id, status, commitSha: "abc1234", createdAt, updatedAt: createdAt };
 }
 
-function render(experiments, runs, emptyHint) {
+function render(experiments, runs, { emptyHint, showArchived = false } = {}) {
   return renderToStaticMarkup(
     React.createElement(
       query.QueryClientProvider,
       { client },
-      React.createElement(ExperimentHistory, { project, experiments, runs, emptyHint, onOpenChanges: () => {}, onOpenRun: () => {} }),
+      React.createElement(ExperimentHistory, { project, experiments, runs, showArchived, emptyHint, onOpenChanges: () => {}, onOpenRun: () => {} }),
     ),
   );
 }
+
+function detail(node, overlay = false) {
+  return renderToStaticMarkup(
+    React.createElement(ExperimentDetail, {
+      node,
+      baselineBranch: project.baselineBranch,
+      overlay,
+      taskTitle: () => "",
+      onSelect: () => {},
+      onClose: () => {},
+      onOpenChanges: () => {},
+      onOpenRun: () => {},
+    }),
+  );
+}
+
+const rowIds = (html) => [...html.matchAll(/data-experiment="([^"]+)"/g)].map((match) => match[1]);
 
 const tree = [
   experiment("baseline", 1, null, "task-a", "Worker pool baseline"),
@@ -202,19 +219,6 @@ describe("ExperimentHistory", () => {
   });
 
   test("diffs a starting point against the project's baseline branch and disables the diff for a missing parent", () => {
-    const detail = (node) =>
-      renderToStaticMarkup(
-        React.createElement(ExperimentDetail, {
-          node,
-          baselineBranch: project.baselineBranch,
-          overlay: false,
-          taskTitle: () => "",
-          onSelect: () => {},
-          onClose: () => {},
-          onOpenChanges: () => {},
-          onOpenRun: () => {},
-        }),
-      );
     const [root, orphan] = buildHistoryNodes([experiment("root", 1, null, null, "Root"), experiment("orphan", 2, "gone", null, "Orphan")], []);
     const rootHtml = detail(root);
     const orphanHtml = detail(orphan);
@@ -227,9 +231,52 @@ describe("ExperimentHistory", () => {
     }, { rootDiff: true, rootMain: false, orphanDisabled: true });
   });
 
+  test("lets a detail pane that covers the list take focus, and leaves one beside it out of the focus order", () => {
+    const [node] = buildHistoryNodes([experiment("root", 1, null, null, "Root")], []);
+    const aside = (html) => html.match(/<aside[^>]*>/)[0];
+
+    assert.deepEqual({ covering: aside(detail(node, true)).includes('tabindex="-1"'), beside: aside(detail(node)).includes("tabindex") }, { covering: true, beside: false });
+  });
+
+  test("hides archived experiments unless asked and names an archived parent in a lead-in", () => {
+    storage.clear();
+    const archivedMiddle = [
+      experiment("base", 1, null, "task-a", "Base"),
+      { ...experiment("dead-end", 2, "base", "task-a", "Dead end"), archived: true },
+      experiment("survivor", 3, "dead-end", "task-a", "Survivor"),
+    ];
+    const leadIn = '<span class="min-w-0 truncate">from \u2066dead-end\u2069</span>';
+
+    const hidden = render(archivedMiddle, []);
+    const shown = render(archivedMiddle, [], { showArchived: true });
+
+    assert.deepEqual(
+      { hidden: { rows: rowIds(hidden), leadIn: hidden.includes(leadIn) }, shown: { rows: rowIds(shown), leadIn: shown.includes(leadIn) } },
+      { hidden: { rows: ["base", "survivor"], leadIn: true }, shown: { rows: ["base", "dead-end", "survivor"], leadIn: false } },
+    );
+  });
+
+  test("shows the caller's hint when every experiment is archived", () => {
+    storage.clear();
+    const archived = [{ ...experiment("shelved", 1, null, "task-a", "Shelved"), archived: true }];
+
+    const html = render(archived, [], { emptyHint: "Every experiment is archived." });
+
+    assert.deepEqual({ hint: html.includes("Every experiment is archived."), rows: rowIds(html) }, { hint: true, rows: [] });
+  });
+
+  test("drops a chapter's status counts and dates when the list is too narrow for them", () => {
+    const noon = Date.UTC(2026, 9, 3, 12);
+    const [group] = groupHistory(buildHistoryNodes([experiment("solo", noon, null, "task-a", "Solo")], [run("solo", noon)]), "task", () => "Reproduce the paper");
+    const text = (showSummary) =>
+      renderToStaticMarkup(React.createElement(ChapterHeader, { group, open: true, showSummary, onToggle: () => {} })).replace(/<[^>]+>/g, "");
+
+    assert.deepEqual({ wide: text(true), narrow: text(false) }, { wide: "Reproduce the paper" + "1" + "1 done · Oct 3", narrow: "Reproduce the paper" + "1" });
+  });
+
   test("shows the caller's hint when there are no experiments", () => {
     storage.clear();
 
-    assert.ok(render([], [], "Nothing here yet.").includes("Nothing here yet."));
+    assert.ok(render([], [], { emptyHint: "Nothing here yet." }).includes("Nothing here yet."));
   });
 });
