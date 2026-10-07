@@ -245,10 +245,13 @@ export function layoutLineage(
     return value;
   };
 
+  // A descendant reached through a non-member starts its own root, so it is not part of this branch.
+  const branch = (node: HistoryNode): HistoryNode[] => [node, ...kids(node).flatMap(branch)];
+
   const rows: HistoryRow[] = [];
   const visit = (node: HistoryNode, lane: number, side: boolean) => {
     if (side && options.collapseFinished && !options.expanded?.has(node.id)) {
-      const hidden = subtreeOf(node).filter((member) => members.has(member.id));
+      const hidden = branch(node);
       if (
         hidden.length >= 4 &&
         hidden.every((member) => member.status === "done") &&
@@ -283,6 +286,34 @@ export function layoutChronological(group: HistoryGroup, newestFirst = false): H
 
 export function laneCount(rows: HistoryRow[]): number {
   return rows.reduce((max, row) => Math.max(max, row.lane + 1), 0);
+}
+
+/** Width of the detail pane when it sits beside the list. */
+export const PANE_W = 380;
+/** Below this width the detail pane covers the list instead of sitting beside it. */
+const OVERLAY_BELOW = 980;
+/** Below this list width the "What changed" column is dropped. */
+const TITLE_COLUMN_FROM = 760;
+/** Below this list width (the default side panel) only the experiment and its status fit. */
+const COMPACT_BELOW = 520;
+
+/** What fits in a History view `width` pixels wide. */
+export function historyFit(width: number, detailOpen: boolean, lineageOrder: boolean) {
+  const overlay = width < OVERLAY_BELOW;
+  const listWidth = detailOpen && !overlay ? width - PANE_W : width;
+  const compact = listWidth < COMPACT_BELOW;
+  return {
+    overlay,
+    /** The open detail pane covers the list, which leaves the tab order until it closes. */
+    listCovered: detailOpen && overlay,
+    whatChanged: listWidth >= TITLE_COLUMN_FROM,
+    /** Lineage order draws the parent on the rail instead. */
+    from: !lineageOrder && !compact,
+    /** The Attempts and Latest columns. */
+    runs: !compact,
+    /** Status counts and dates beside a chapter's title. */
+    chapterSummary: !compact,
+  };
 }
 
 export function compactHistoryId(id: string, length = 8): string {

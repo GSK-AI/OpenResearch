@@ -2045,9 +2045,12 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
                       project={activeProject}
                       experiments={experiments}
                       runs={runs}
+                      showArchived={showArchivedExperiments}
                       agentSessionId={effectiveScope === "agent" ? activeSessionId : null}
                       emptyHint={
-                        effectiveScope === "agent" && experiments.length > 0
+                        !showArchivedExperiments && scopedExperiments.length > 0 && visibleScopedExperiments.length === 0
+                          ? m.tree_all_experiments_archived()
+                          : effectiveScope === "agent" && experiments.length > 0
                           ? m.app_no_task_experiments()
                           : undefined
                       }

@@ -25,12 +25,14 @@ import {
   groupHistory,
   groupKeyOf,
   historyBackendLabel,
+  historyFit,
   historyJobId,
   historyStatus,
   laneCount,
   layoutChronological,
   layoutLineage,
   originOf,
+  PANE_W,
   shortName,
   subtreeOf,
   type HistoryGroup,
@@ -49,13 +51,6 @@ const LEAD_IN_H = 22;
 const LANE = 14;
 const RAIL_PAD = 15;
 const laneX = (lane: number) => RAIL_PAD + LANE / 2 + lane * LANE;
-const PANE_W = 380;
-/** Below this width the detail pane covers the list instead of sitting beside it. */
-const OVERLAY_BELOW = 980;
-/** Below this list width the "What changed" column is dropped. */
-const TITLE_COLUMN_FROM = 760;
-/** Below this list width (the default side panel) only the experiment and its status fit. */
-const COMPACT_BELOW = 520;
 
 const STATUS_WORD: Record<HistoryStatus, () => string> = {
   done: m.status_done,
@@ -349,7 +344,7 @@ function Rail({ placed, height, path, selectedId }: {
 }
 
 // ---- chapter --------------------------------------------------------------------------
-function ChapterHeader({ group, open, onToggle }: { group: HistoryGroup; open: boolean; onToggle: () => void }) {
+export function ChapterHeader({ group, open, showSummary, onToggle }: { group: HistoryGroup; open: boolean; showSummary: boolean; onToggle: () => void }) {
   const count = (status: HistoryStatus) => group.nodes.filter((node) => node.status === status).length;
   const summary = (["done", "failed", "cancelled", "running", "none"] as const)
     .map((status) => [count(status), status] as const)
@@ -368,10 +363,12 @@ function ChapterHeader({ group, open, onToggle }: { group: HistoryGroup; open: b
       <ChevronRight size={12} className={`shrink-0 text-muted transition-transform ${open ? "rotate-90" : ""}`} />
       <span className="truncate text-xs font-semibold uppercase tracking-wider text-subtext">{group.title}</span>
       <span className="text-xs font-medium tabular-nums text-muted">{group.nodes.length}</span>
-      <span className="ms-auto whitespace-nowrap text-xs text-subtext">
-        {summary}
-        <span className="text-muted"> · {first === last ? first : `${first} – ${last}`}</span>
-      </span>
+      {showSummary && (
+        <span className="ms-auto whitespace-nowrap text-xs text-subtext">
+          {summary}
+          <span className="text-muted"> · {first === last ? first : `${first} – ${last}`}</span>
+        </span>
+      )}
     </button>
   );
 }
@@ -417,11 +414,16 @@ export function ExperimentDetail({ node, baselineBranch, overlay, taskTitle, onS
   const [showAllAncestors, setShowAllAncestors] = useState(false);
   const [showAllAttempts, setShowAllAttempts] = useState(false);
   const changeId = "history-change-" + useId().replace(/:/g, "");
+  const asideRef = useRef<HTMLElement>(null);
   useEffect(() => {
     setShowFullChange(false);
     setShowAllAncestors(false);
     setShowAllAttempts(false);
   }, [node.id]);
+  // Covering the list takes focus with it, so keyboard focus never stays on a hidden row.
+  useEffect(() => {
+    if (overlay) asideRef.current?.focus({ preventScroll: true });
+  }, [overlay, node.id]);
 
   const ancestors = ancestorsOf(node);
   const folded = showAllAncestors ? [] : ancestors.slice(0, Math.max(0, ancestors.length - 2));
@@ -436,6 +438,8 @@ export function ExperimentDetail({ node, baselineBranch, overlay, taskTitle, onS
 
   return (
     <aside
+      ref={asideRef}
+      tabIndex={overlay ? -1 : undefined}
       aria-label={m.history_details_for({ name: ltr(node.experiment.slug) })}
       onKeyDown={(event) => {
         if (event.key === "Escape") onClose();
@@ -617,14 +621,17 @@ export function ExperimentHistory({
   project,
   experiments,
   runs,
+  showArchived,
   agentSessionId,
   emptyHint,
   onOpenChanges,
   onOpenRun,
 }: {
   project: Project;
+  /** Every experiment, archived ones included, so a shown experiment keeps its lineage. */
   experiments: Experiment[];
   runs: Run[];
+  showArchived: boolean;
   agentSessionId?: string | null;
   emptyHint?: string;
   onOpenChanges: (experimentId: string) => void;
@@ -662,10 +669,13 @@ export function ExperimentHistory({
     return ids;
   }, [path, selected]);
 
-  const scoped = useMemo(() => (agentSessionId ? nodes.filter((node) => node.task === agentSessionId) : nodes), [nodes, agentSessionId]);
+  const scoped = useMemo(
+    () => nodes.filter((node) => (!agentSessionId || node.task === agentSessionId) && (showArchived || !node.experiment.archived)),
+    [nodes, agentSessionId, showArchived],
+  );
+  const needle = query.trim().toLowerCase();
   const visible = useMemo(() => {
     let shown = scoped;
-    const needle = query.trim().toLowerCase();
     if (needle) {
       const hits = new Set(
         shown
@@ -678,32 +688,30 @@ export function ExperimentHistory({
     }
     if (pathOnly && selected) shown = shown.filter((node) => lineage.has(node.id));
     return shown;
-  }, [scoped, query, pathOnly, selected, lineage, byId]);
+  }, [scoped, needle, pathOnly, selected, lineage, byId]);
 
   const groups = useMemo(
     () => groupHistory(visible, prefs.grouping, (task) => taskTitles.get(task)),
     [visible, prefs.grouping, taskTitles],
   );
   const lineageOrder = prefs.order === "lineage";
+  // Nothing folds during a search, which could otherwise fold a match away.
   const rowsByGroup = useMemo(
     () =>
       new Map(
         groups.map((group) => [
           group.key,
           lineageOrder
-            ? layoutLineage(group, { collapseFinished: true, expanded, keep: path })
+            ? layoutLineage(group, { collapseFinished: !needle, expanded, keep: path })
             : layoutChronological(group, prefs.order === "newest"),
         ]),
       ),
-    [groups, lineageOrder, prefs.order, expanded, path],
+    [groups, lineageOrder, prefs.order, needle, expanded, path],
   );
   const lanes = lineageOrder ? Math.max(1, ...[...rowsByGroup.values()].map(laneCount)) : 0;
   const gutter = lineageOrder ? RAIL_PAD + LANE * lanes + 10 : 16;
 
-  const overlay = width < OVERLAY_BELOW;
-  const listWidth = selected && !overlay ? width - PANE_W : width;
-  const showTitle = listWidth >= TITLE_COLUMN_FROM;
-  const compact = listWidth < COMPACT_BELOW;
+  const fit = historyFit(width, Boolean(selected), lineageOrder);
 
   const rowElement = (id: string) => listRef.current?.querySelector<HTMLElement>(`[data-experiment="${CSS.escape(id)}"]`);
   const reveal = (id: string) => requestAnimationFrame(() => rowElement(id)?.scrollIntoView({ block: "nearest" }));
@@ -760,14 +768,14 @@ export function ExperimentHistory({
   const columns = (
     <>
       <span className="w-24 shrink-0">{m.settings_page_status()}</span>
-      {!compact && <span className="w-20 shrink-0">{m.history_column_attempts()}</span>}
-      {!compact && <span className="w-16 shrink-0 text-end">{m.history_column_latest()}</span>}
+      {fit.runs && <span className="w-20 shrink-0">{m.history_column_attempts()}</span>}
+      {fit.runs && <span className="w-16 shrink-0 text-end">{m.history_column_latest()}</span>}
     </>
   );
 
   return (
     <div ref={rootRef} className="absolute inset-0 flex min-h-0 bg-background">
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-w-0 flex-1 flex-col" inert={fit.listCovered}>
         <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-x-4 gap-y-1.5 border-b border-divider-faint px-4 py-1.5 text-xs text-subtext">
           <Segmented label={m.history_group()} value={prefs.grouping} options={[["task", m.history_group_task()], ["lineage", m.history_lineage()], ["none", m.history_group_none()]]} onChange={(grouping) => setPrefs({ grouping })} />
           <Segmented label={m.history_order()} value={prefs.order} options={[["lineage", m.history_lineage()], ["oldest", m.history_order_oldest()], ["newest", m.history_order_newest()]]} onChange={(value) => setPrefs({ order: value })} />
@@ -817,8 +825,8 @@ export function ExperimentHistory({
             <>
               <div className="sticky top-0 z-20 flex h-8 items-center gap-4 border-b border-border-variant bg-background pe-4 text-xs font-medium text-subtext" style={{ paddingInlineStart: gutter }}>
                 <span className="min-w-0 flex-[2] truncate">{m.tree_experiment()}</span>
-                {showTitle && <span className="min-w-0 flex-[3]">{m.history_what_changed()}</span>}
-                {!lineageOrder && <span className="w-32 shrink-0">{m.history_column_from()}</span>}
+                {fit.whatChanged && <span className="min-w-0 flex-[3]">{m.history_what_changed()}</span>}
+                {fit.from && <span className="w-32 shrink-0">{m.history_column_from()}</span>}
                 {columns}
               </div>
               {groups.map((group) => {
@@ -830,7 +838,7 @@ export function ExperimentHistory({
                 );
                 return (
                   <div key={group.key} role="group" aria-label={group.title || m.app_experiments()}>
-                    {group.title && <ChapterHeader group={group} open={open} onToggle={() => setClosedGroups((current) => toggled(current, group.key))} />}
+                    {group.title && <ChapterHeader group={group} open={open} showSummary={fit.chapterSummary} onToggle={() => setClosedGroups((current) => toggled(current, group.key))} />}
                     {open && (
                       <div className="relative" style={{ height }}>
                         {lineageOrder && <Rail placed={placed} height={height} path={path} selectedId={selectedId} />}
@@ -866,10 +874,10 @@ export function ExperimentHistory({
                                 <span className="min-w-0 flex-[2] truncate">
                                   <span className="text-text">{m.history_collapsed_more({ count: fmtNumber(hidden.length) })}</span> · {shortName(head)} → {shortName(hidden.at(-1)!)}
                                 </span>
-                                {showTitle && <span className="min-w-0 flex-[3] truncate">{m.history_collapsed_hint()}</span>}
+                                {fit.whatChanged && <span className="min-w-0 flex-[3] truncate">{m.history_collapsed_hint()}</span>}
                                 <span className="w-24 shrink-0" />
-                                {!compact && <span className="w-20 shrink-0" />}
-                                {!compact && (
+                                {fit.runs && <span className="w-20 shrink-0" />}
+                                {fit.runs && (
                                   <span className="w-16 shrink-0 text-end">
                                     <When ms={latest} />
                                   </span>
@@ -894,13 +902,13 @@ export function ExperimentHistory({
                               <span className={`min-w-0 flex-[2] truncate font-mono text-sm text-text ${isSelected ? "font-medium" : ""}`} title={node.experiment.slug}>
                                 {node.experiment.slug}
                               </span>
-                              {showTitle && (
+                              {fit.whatChanged && (
                                 <span className="min-w-0 flex-[3] truncate text-sm text-subtext" title={node.experiment.title ?? undefined}>
                                   {node.code ? `${node.code}: ` : ""}
                                   {node.label}
                                 </span>
                               )}
-                              {!lineageOrder && (
+                              {fit.from && (
                                 <span className="w-32 shrink-0 truncate text-xs text-subtext">
                                   {originOf(node, 16)}
                                 </span>
@@ -908,12 +916,12 @@ export function ExperimentHistory({
                               <span className="w-24 shrink-0">
                                 <StatusLabel status={node.status} />
                               </span>
-                              {!compact && (
+                              {fit.runs && (
                                 <span className="w-20 shrink-0">
                                   <AttemptMarks runs={node.runs} />
                                 </span>
                               )}
-                              {!compact && (
+                              {fit.runs && (
                                 <span className="w-16 shrink-0 text-end">
                                   <When ms={node.latestRun?.createdAt ?? node.createdAt} />
                                 </span>
@@ -934,7 +942,7 @@ export function ExperimentHistory({
         <ExperimentDetail
           node={selected}
           baselineBranch={project.baselineBranch}
-          overlay={overlay}
+          overlay={fit.overlay}
           taskTitle={taskTitle}
           onSelect={select}
           onClose={closeDetail}
