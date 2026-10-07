@@ -61,6 +61,21 @@ pub async fn submit_local_ssh_with_source(
         .container
         .as_ref()
         .map(|container| container.for_run(&run_id));
+
+    // The remote env: everything the user synced (API keys), plus the tokens
+    // the run script expects. Exported inside run.sh (written owner-only).
+    // Resolved before staging so a rejected tracking mode uploads nothing.
+    let (mut env, tracking) = crate::config::run_env(
+        &run_id,
+        &project.id,
+        args.tracking == Some(crate::TrackingBackend::Tensorboard),
+        true,
+        crate::config::TensorboardDefault::ssh(container.is_some()),
+    )?;
+    if let Ok(hf_token) = crate::jobs::huggingface::resolve_token() {
+        env.entry("HF_TOKEN".to_string()).or_insert(hf_token);
+    }
+
     let remote_dir = ssh::stage_source(
         &target,
         &run_id,
@@ -70,19 +85,6 @@ pub async fn submit_local_ssh_with_source(
     )
     .await?;
     let script = crate::compute::staged_script(&run_command);
-
-    // The remote env: everything the user synced (API keys), plus the tokens
-    // the run script expects. Exported inside run.sh (written owner-only).
-    let (mut env, tracking) = crate::config::run_env(
-        &run_id,
-        &project.id,
-        args.tracking == Some(crate::TrackingBackend::Tensorboard),
-        true,
-        crate::config::TensorboardDefault::RemoteRunDirectory,
-    )?;
-    if let Ok(hf_token) = crate::jobs::huggingface::resolve_token() {
-        env.entry("HF_TOKEN".to_string()).or_insert(hf_token);
-    }
 
     let mut descriptor = BackendDescriptor {
         ssh_container: container.clone(),

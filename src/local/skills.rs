@@ -130,6 +130,12 @@ pub const CATALOG: &[Skill] = &[
     },
 ];
 
+/// The TensorBoard alternative offered alongside a configured Trackio server.
+const TENSORBOARD_INSTEAD: &str = "For network-free tracking instead, launch with \
+     `--tracking tensorboard`, set `report_to=[\"tensorboard\"]` and \
+     `logging_dir=os.environ[\"TENSORBOARD_LOGDIR\"]`, then use `orx tensorboard <runId>` \
+     for the recorded viewer command.";
+
 /// What a template's `{tracking}` step says, given the Trackio connection.
 ///
 /// With a server configured, Trackio is the concrete instruction and the agent
@@ -150,32 +156,32 @@ fn tracking_guidance_for(config: Option<&crate::local::trackio::Config>) -> Stri
                 `orx tensorboard <runId>` for the recorded viewer command."
             .to_string();
     };
-    // With no project configured, `TRACKIO_PROJECT` is not in the run's
-    // environment at all, so guidance that subscripts `os.environ` would hand
-    // the agent a KeyError instead of a dashboard.
-    let project = match config.project.as_deref() {
-        Some(project) => format!(
-            "The project is `{project}`, in `TRACKIO_PROJECT`; pass \
-             `project=os.environ[\"TRACKIO_PROJECT\"]`."
-        ),
-        None => "No default project is configured and `TRACKIO_PROJECT` is unset, so choose a \
-                 project name yourself — after the paper — and pass it literally."
-            .to_string(),
+    // Without a project, launches skip Trackio and no `TRACKIO_` variable
+    // reaches the run, so Trackio logging code would find no server there.
+    let Some(project) = config
+        .project
+        .as_deref()
+        .filter(|project| !project.trim().is_empty())
+    else {
+        return format!(
+            "Optional tracking: a self-hosted Trackio server is configured at {server}, but \
+             `TRACKIO_PROJECT` is not set, so orx launches runs without Trackio. If the user \
+             wants metrics logged there, ask them to set `TRACKIO_PROJECT` first. \
+             {TENSORBOARD_INSTEAD}",
+            server = config.server_url,
+        );
     };
     format!(
         "Tracking: a self-hosted Trackio server is configured at {server} and every run gets \
          `TRACKIO_SERVER_URL` and `TRACKIO_WRITE_TOKEN` in its environment. Log metrics with \
          `trackio.init(project=…, name=os.environ.get(\"TRACKIO_RUN\"))` — Trackio's Python \
          client reads the server URL and token from the environment itself, but reads neither \
-         `TRACKIO_PROJECT` nor `TRACKIO_RUN`, so pass both explicitly. {project} The dashboard \
-         is {dashboard}. Loopback and wildcard-bind addresses only work for local runs; remote \
-         runs require a remotely reachable URL, and orx omits local-only Trackio settings. \
-         Never print or echo `TRACKIO_WRITE_TOKEN`. For network-free tracking instead, launch \
-         with `--tracking tensorboard`, set `report_to=[\"tensorboard\"]` and \
-         `logging_dir=os.environ[\"TENSORBOARD_LOGDIR\"]`, then use \
-         `orx tensorboard <runId>` for the recorded viewer command.",
+         `TRACKIO_PROJECT` nor `TRACKIO_RUN`, so pass both explicitly. The project is \
+         `{project}`, in `TRACKIO_PROJECT`; pass `project=os.environ[\"TRACKIO_PROJECT\"]`. \
+         The dashboard is {dashboard}. Loopback and wildcard-bind addresses only work for local \
+         runs; remote runs require a remotely reachable URL, and orx omits local-only Trackio \
+         settings. Never print or echo `TRACKIO_WRITE_TOKEN`. {TENSORBOARD_INSTEAD}",
         server = config.server_url,
-        project = project,
         dashboard = config.dashboard_url(),
     )
 }
@@ -369,10 +375,12 @@ mod tests {
             has_token: false,
         };
         let out = super::tracking_guidance_for(Some(&config));
-        // With no project configured the variable is absent from the run, so
-        // `os.environ["TRACKIO_PROJECT"]` would be a KeyError, not a dashboard.
+        // With no project configured, launches skip Trackio and the run gets
+        // no `TRACKIO_` variable, so the agent must not be told to log there.
         assert!(!out.contains("os.environ[\"TRACKIO_PROJECT\"]"));
-        assert!(out.contains("choose a project name yourself"));
-        assert!(out.contains("The dashboard is http://127.0.0.1:7860/."));
+        assert!(!out.contains("every run gets"));
+        assert!(out.contains("orx launches runs without Trackio"));
+        assert!(out.contains("TENSORBOARD_LOGDIR"));
+        crate::local::assert_agent_guidance_is_ui_agnostic("tracking", &out);
     }
 }
