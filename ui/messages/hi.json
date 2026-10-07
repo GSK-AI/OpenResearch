@@ -456,6 +456,7 @@
   "tracking_links_open_trackio": "रन {run} के लिए Trackio खोलें",
   "tracking_links_copy_tensorboard_title": "रन {run} के लिए दर्ज TensorBoard कमांड कॉपी करें",
   "tracking_links_copy_tensorboard": "रन {run} के लिए TensorBoard कमांड कॉपी करें",
+  "tracking_links_copy_tensorboard_failed": "TensorBoard कमांड कॉपी नहीं हो सकी। नीचे दी गई कमांड चुनें और उसे मैन्युअल रूप से कॉपी करें।",
   "settings_page_settings": "सेटिंग्स",
   "settings_page_share_anonymous_product_usage_linked_only_to_a": "केवल एक रैंडम इंस्टॉलेशन ID से जुड़ा अनाम प्रोडक्ट उपयोग साझा करें।",
   "settings_page_signed_in": "साइन इन है",

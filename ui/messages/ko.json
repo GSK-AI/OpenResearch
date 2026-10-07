@@ -456,6 +456,7 @@
   "tracking_links_open_trackio": "실행 {run}의 Trackio 열기",
   "tracking_links_copy_tensorboard_title": "실행 {run}에 기록된 TensorBoard 명령 복사",
   "tracking_links_copy_tensorboard": "실행 {run}의 TensorBoard 명령 복사",
+  "tracking_links_copy_tensorboard_failed": "TensorBoard 명령을 복사하지 못했습니다. 아래 명령을 선택해 직접 복사하세요.",
   "settings_page_settings": "설정",
   "settings_page_share_anonymous_product_usage_linked_only_to_a": "무작위 설치 ID에만 연결된 익명 제품 사용 정보를 공유합니다.",
   "settings_page_signed_in": "로그인됨",

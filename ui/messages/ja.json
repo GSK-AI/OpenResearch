@@ -456,6 +456,7 @@
   "tracking_links_open_trackio": "実行 {run} の Trackio を開く",
   "tracking_links_copy_tensorboard_title": "実行 {run} に記録された TensorBoard コマンドをコピー",
   "tracking_links_copy_tensorboard": "実行 {run} の TensorBoard コマンドをコピー",
+  "tracking_links_copy_tensorboard_failed": "TensorBoard コマンドをコピーできませんでした。下のコマンドを選択して手動でコピーしてください。",
   "settings_page_settings": "設定",
   "settings_page_share_anonymous_product_usage_linked_only_to_a": "ランダムなインストール ID のみに紐付いた匿名の製品利用状況を共有します。",
   "settings_page_signed_in": "サインイン済み",

@@ -456,6 +456,7 @@
   "tracking_links_open_trackio": "打开运行 {run} 的 Trackio",
   "tracking_links_copy_tensorboard_title": "复制为运行 {run} 记录的 TensorBoard 命令",
   "tracking_links_copy_tensorboard": "复制运行 {run} 的 TensorBoard 命令",
+  "tracking_links_copy_tensorboard_failed": "无法复制 TensorBoard 命令。请选中下方的命令并手动复制。",
   "settings_page_settings": "设置",
   "settings_page_share_anonymous_product_usage_linked_only_to_a": "共享匿名的产品使用数据，仅与随机安装 ID 关联。",
   "settings_page_signed_in": "已登录",

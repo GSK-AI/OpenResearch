@@ -2362,13 +2362,16 @@ function EnvRow({
   name,
   entry,
   onVars,
-  onTested,
+  probe = null,
+  onTest,
 }: {
   name: string;
   entry: EnvVar | undefined;
   onVars: (vars: EnvVar[]) => void;
-  /** Called when Test runs, so the section can drop its load-time reason. */
-  onTested?: () => void;
+  /** The Trackio Test result shown under this row; owned by the section. */
+  probe?: TrackioPreflight | "checking" | null;
+  /** Runs the Trackio Test; given only to the server URL row. */
+  onTest?: () => void;
 }) {
   const setEnvVarMutation = useMutation({ mutationFn: (args: Parameters<typeof setEnvVar>) => setEnvVar(...args) });
   const deleteEnvVarMutation = useMutation({ mutationFn: deleteEnvVar });
@@ -2378,7 +2381,6 @@ function EnvRow({
   const stored = entry?.value ?? "";
   const [value, setValue] = useState(stored);
   const [saving, setSaving] = useState(false);
-  const [probe, setProbe] = useState<TrackioPreflight | "checking" | null>(null);
   useEffect(() => setValue(stored), [stored]);
 
   // Whether this value is shown in the clear. The server decides for a key it
@@ -2412,21 +2414,6 @@ function EnvRow({
       showEnvError(name, err);
     } finally {
       setSaving(false);
-    }
-  }
-
-  async function test() {
-    onTested?.();
-    setProbe("checking");
-    try {
-      setProbe(await trackioPreflight());
-    } catch (err) {
-      setProbe({
-        reachable: false,
-        version: null,
-        writeAccess: null,
-        error: err instanceof Error ? err.message : String(err),
-      });
     }
   }
 
@@ -2466,8 +2453,8 @@ function EnvRow({
         </td>
         <td>
           <span className="inline-flex items-center gap-1">
-            {name === TRACKIO_SERVER_URL_KEY && entry && !dirty && (
-              <Button size="small" onClick={() => void test()} disabled={saving}>
+            {onTest && entry && !dirty && (
+              <Button size="small" onClick={onTest} disabled={saving}>
                 {m.settings_trackio_test()}
               </Button>
             )}
@@ -2596,19 +2583,58 @@ function EnvVarsSection() {
   const loadError = vars ? null : varsQuery.error?.message ?? null;
   const [adding, setAdding] = useState(false);
   const [trackio, setTrackio] = useState<TrackioSettings | null>(null);
-  // After Test, the row's own result replaces the reason shown on load.
-  const [trackioTested, setTrackioTested] = useState(false);
+  // A Test result replaces the verdict's reason while it is shown.
+  const [trackioProbe, setTrackioProbe] = useState<TrackioPreflight | "checking" | null>(null);
+  const trackioProbeRun = useRef(0);
 
+  // The saved Trackio connection. The verdict and any Test result describe one
+  // connection, so a change to a TRACKIO_ value refetches the verdict and drops
+  // the old result, including a Test still in flight.
+  const trackioConnection =
+    vars === null
+      ? null
+      : JSON.stringify(
+          vars
+            .filter((v) => v.key.startsWith("TRACKIO_"))
+            .map((v) => [v.key, v.value ?? v.maskedValue, v.inProcessEnv]),
+        );
   useEffect(() => {
-    getTrackioSettings().then(setTrackio).catch(() => setTrackio(null));
-  }, []);
+    trackioProbeRun.current += 1;
+    setTrackioProbe(null);
+    setTrackio(null);
+    if (trackioConnection === null) return;
+    let current = true;
+    getTrackioSettings()
+      .then((settings) => {
+        if (current) setTrackio(settings);
+      })
+      .catch(() => {
+        if (current) setTrackio(null);
+      });
+    return () => {
+      current = false;
+    };
+  }, [trackioConnection]);
 
-  // Every mutation returns the fresh full list; a changed TRACKIO_ key also
-  // changes the Trackio health verdict shown on this settings card.
-  const applyVars = (v: EnvVar[]) => {
-    setVars(v);
-    getTrackioSettings().then(setTrackio).catch(() => setTrackio(null));
-  };
+  async function testTrackio() {
+    const run = ++trackioProbeRun.current;
+    setTrackioProbe("checking");
+    let result: TrackioPreflight;
+    try {
+      result = await trackioPreflight();
+    } catch (err) {
+      result = {
+        reachable: false,
+        version: null,
+        writeAccess: null,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+    if (run === trackioProbeRun.current) setTrackioProbe(result);
+  }
+
+  // Every mutation returns the fresh full list.
+  const applyVars = (v: EnvVar[]) => setVars(v);
 
   // Recommended keys first (fixed order), then custom variables in file order.
   const customKeys =
@@ -2646,7 +2672,7 @@ function EnvVarsSection() {
             address: ltr("127.0.0.1"),
           })}
         </p>
-        {trackio?.serverUrl && trackio.reason && !trackioTested && (
+        {trackio?.serverUrl && trackio.reason && !trackioProbe && (
           <p dir="auto" className={SETTINGS_NOTE_CLASS_NAME}>{trackio.reason}</p>
         )}
         <p className="settings-sub">
@@ -2670,7 +2696,8 @@ function EnvVarsSection() {
                   name={name}
                   entry={vars.find((v) => v.key === name)}
                   onVars={applyVars}
-                  onTested={name === TRACKIO_SERVER_URL_KEY ? () => setTrackioTested(true) : undefined}
+                  probe={name === TRACKIO_SERVER_URL_KEY ? trackioProbe : null}
+                  onTest={name === TRACKIO_SERVER_URL_KEY ? () => void testTrackio() : undefined}
                 />
               ))}
               {adding && (

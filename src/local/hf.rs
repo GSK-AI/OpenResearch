@@ -91,7 +91,7 @@ pub async fn submit_local_hf_with_source(
         &project.id,
         args.tracking == Some(crate::TrackingBackend::Tensorboard),
         true,
-        crate::config::TensorboardDefault::ExplicitOnly,
+        crate::config::TensorboardDefault::HF_JOBS,
     )?;
     for key in [
         crate::config::TRACKIO_SERVER_URL,

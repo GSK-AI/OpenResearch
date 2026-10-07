@@ -4752,13 +4752,10 @@ async fn set_env_var(Json(req): Json<SetEnvVarReq>) -> ApiResult {
         // `trackio show` prints one write-access URL with the token in its query
         // string, so that is what gets pasted here. Store the two separately:
         // the URL is shown in the clear and ends up in every dashboard link, and
-        // the token must not travel with it.
+        // the token must not travel with it. A different server without a
+        // token of its own drops the previous server's token.
         if key == crate::config::TRACKIO_SERVER_URL {
-            let (url, token) = crate::config::split_trackio_write_token(&value);
-            crate::config::write_synced_env_var(&key, &url)?;
-            if let Some(token) = token {
-                crate::config::write_synced_env_var(crate::config::TRACKIO_WRITE_TOKEN, &token)?;
-            }
+            crate::config::save_trackio_server_url(&value)?;
             return Ok(Json(env_settings_json()));
         }
         crate::config::write_synced_env_var(&key, &value)?;

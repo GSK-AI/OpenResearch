@@ -456,6 +456,7 @@
   "tracking_links_open_trackio": "Abrir Trackio para la ejecución {run}",
   "tracking_links_copy_tensorboard_title": "Copiar el comando de TensorBoard registrado para la ejecución {run}",
   "tracking_links_copy_tensorboard": "Copiar el comando de TensorBoard para la ejecución {run}",
+  "tracking_links_copy_tensorboard_failed": "No se pudo copiar el comando de TensorBoard. Selecciónalo abajo y cópialo manualmente.",
   "settings_page_settings": "Configuración",
   "settings_page_share_anonymous_product_usage_linked_only_to_a": "Compartir datos de uso anónimos, vinculados solo a un ID de instalación aleatorio.",
   "settings_page_signed_in": "Sesión iniciada",

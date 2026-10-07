@@ -456,6 +456,7 @@
   "tracking_links_open_trackio": "باز کردن Trackio برای اجرای {run}",
   "tracking_links_copy_tensorboard_title": "کپی فرمان TensorBoard ثبت‌شده برای اجرای {run}",
   "tracking_links_copy_tensorboard": "کپی فرمان TensorBoard برای اجرای {run}",
+  "tracking_links_copy_tensorboard_failed": "کپی فرمان TensorBoard انجام نشد. فرمان زیر را انتخاب کنید و دستی کپی کنید.",
   "settings_page_settings": "تنظیمات",
   "settings_page_share_anonymous_product_usage_linked_only_to_a": "داده‌های ناشناس استفاده از محصول را که فقط به یک شناسهٔ تصادفی نصب پیوند دارد، به اشتراک بگذارید.",
   "settings_page_signed_in": "وارد شده",

@@ -389,7 +389,11 @@ pub fn remove_synced_env_var(key: &str) -> Result<()> {
     let Some(path) = dirs::home_dir().map(|h| h.join(".openresearch").join("env")) else {
         return Ok(());
     };
-    let Ok(existing) = std::fs::read_to_string(&path) else {
+    remove_synced_env_var_at(&path, key)
+}
+
+fn remove_synced_env_var_at(path: &std::path::Path, key: &str) -> Result<()> {
+    let Ok(existing) = std::fs::read_to_string(path) else {
         return Ok(());
     };
     let prefix = format!("export {key}=");
@@ -402,7 +406,7 @@ pub fn remove_synced_env_var(key: &str) -> Result<()> {
     } else {
         format!("{}\n", lines.join("\n"))
     };
-    std::fs::write(&path, body)?;
+    std::fs::write(path, body)?;
     Ok(())
 }
 
@@ -419,8 +423,11 @@ pub fn write_synced_env_vars(values: &[(&str, &str)]) -> Result<()> {
         .ok_or_else(|| anyhow!("no home directory"))?
         .join(".openresearch");
     std::fs::create_dir_all(&dir)?;
-    let path = dir.join("env");
-    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    write_synced_env_vars_at(&dir.join("env"), values)
+}
+
+fn write_synced_env_vars_at(path: &std::path::Path, values: &[(&str, &str)]) -> Result<()> {
+    let existing = std::fs::read_to_string(path).unwrap_or_default();
     let mut lines: Vec<String> = existing.lines().map(str::to_string).collect();
     for (key, value) in values {
         // Inverse of synced_env_var's unescaping: backslashes first, then quotes.
@@ -453,12 +460,12 @@ pub fn write_synced_env_vars(values: &[(&str, &str)]) -> Result<()> {
             use std::os::unix::fs::OpenOptionsExt;
             opts.mode(0o600); // applies on create only
         }
-        opts.open(&path)?.write_all(body.as_bytes())?;
+        opts.open(path)?.write_all(body.as_bytes())?;
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
     }
     Ok(())
 }
@@ -544,20 +551,25 @@ fn env_or_synced(key: &str) -> Option<String> {
 /// hands out exactly that form of URL — so normalise here too, or the token ends
 /// up pasted into the middle of every probe and dashboard link.
 fn trackio_connection() -> Option<(String, Option<String>)> {
-    if let Some(raw) = std::env::var(TRACKIO_SERVER_URL)
-        .ok()
-        .filter(|v| !v.is_empty())
-    {
-        let token = std::env::var(TRACKIO_WRITE_TOKEN)
-            .ok()
-            .filter(|v| !v.is_empty());
-        return Some(pair_trackio_connection(&raw, token));
+    trackio_connection_from(&process_env, &synced_env_var)
+}
+
+/// A non-empty var from orx's own process environment.
+fn process_env(key: &str) -> Option<String> {
+    std::env::var(key).ok().filter(|v| !v.is_empty())
+}
+
+/// [`trackio_connection`] with its two sources passed in: `process` stands for
+/// orx's own environment and `synced` for the synced env file.
+fn trackio_connection_from(
+    process: &dyn Fn(&str) -> Option<String>,
+    synced: &dyn Fn(&str) -> Option<String>,
+) -> Option<(String, Option<String>)> {
+    if let Some(raw) = process(TRACKIO_SERVER_URL) {
+        return Some(pair_trackio_connection(&raw, process(TRACKIO_WRITE_TOKEN)));
     }
-    let raw = synced_env_var(TRACKIO_SERVER_URL)?;
-    Some(pair_trackio_connection(
-        &raw,
-        synced_env_var(TRACKIO_WRITE_TOKEN),
-    ))
+    let raw = synced(TRACKIO_SERVER_URL)?;
+    Some(pair_trackio_connection(&raw, synced(TRACKIO_WRITE_TOKEN)))
 }
 
 /// The pairing [`trackio_connection`] applies once it has picked a source, with
@@ -622,6 +634,48 @@ pub fn split_trackio_write_token(url: &str) -> (String, Option<String>) {
     (base.to_string(), token)
 }
 
+/// Save a Trackio address entered in Settings, keeping the saved write token
+/// paired with the server it was issued for.
+///
+/// An embedded `write_token` is split out and replaces the saved token. With
+/// no embedded token, the saved one is kept for the same server (a trailing
+/// slash is not a different server) and for a first address saved after its
+/// token, but dropped when the address moves to a different server: the
+/// Settings probe would otherwise send it to that server as
+/// `X-Trackio-Write-Token`.
+pub fn save_trackio_server_url(raw_url: &str) -> Result<()> {
+    use anyhow::anyhow;
+    let dir = dirs::home_dir()
+        .ok_or_else(|| anyhow!("no home directory"))?
+        .join(".openresearch");
+    std::fs::create_dir_all(&dir)?;
+    save_trackio_server_url_at(&dir.join("env"), raw_url)
+}
+
+fn save_trackio_server_url_at(path: &std::path::Path, raw_url: &str) -> Result<()> {
+    let (url, embedded_token) = split_trackio_write_token(raw_url);
+    let server = |url: &str| url.trim_end_matches('/').to_string();
+    let moved = list_synced_env_from(path)
+        .into_iter()
+        .find(|(key, _)| key == TRACKIO_SERVER_URL)
+        .is_some_and(|(_, previous)| {
+            server(&split_trackio_write_token(&previous).0) != server(&url)
+        });
+    match embedded_token {
+        Some(token) => write_synced_env_vars_at(
+            path,
+            &[(TRACKIO_SERVER_URL, &url), (TRACKIO_WRITE_TOKEN, &token)],
+        ),
+        None => {
+            write_synced_env_vars_at(path, &[(TRACKIO_SERVER_URL, &url)])?;
+            if moved {
+                remove_synced_env_var_at(path, TRACKIO_WRITE_TOKEN)?;
+            }
+            Ok(())
+        }
+    }
+}
+
 /// The dashboard URL for a project on `server_url`.
 ///
 /// Trackio's dashboard supports `project`, `metrics`, `sidebar`, `footer`,
@@ -664,6 +718,30 @@ pub enum TensorboardDefault {
     Unavailable(&'static str),
 }
 
+impl TensorboardDefault {
+    /// Modal sandboxes mount no storage that outlives them.
+    pub const MODAL: Self = Self::Unavailable(
+        "Modal sandboxes are ephemeral and their event files are deleted at teardown",
+    );
+    /// Hugging Face Jobs mount only the read-only source volume.
+    pub const HF_JOBS: Self = Self::Unavailable(
+        "Hugging Face Jobs are ephemeral and their event files are deleted when the job ends",
+    );
+
+    /// SSH runs write under the host's `~/.orx`, which the recorded viewer
+    /// command reads over SSH. A container run writes inside the container
+    /// instead, where that host-side command cannot see the files.
+    pub fn ssh(in_container: bool) -> Self {
+        if in_container {
+            Self::Unavailable(
+                "an SSH container run keeps its event files inside the container, where the recorded viewer command cannot read them",
+            )
+        } else {
+            Self::RemoteRunDirectory
+        }
+    }
+}
+
 impl TrackioLaunch {
     /// Persist only the injected public destination. Off/skipped launches have
     /// no tracking link, and the write token is never part of the record.
@@ -698,13 +776,25 @@ pub fn trackio_run_env_with_launch(
     run_id: &str,
     remote: bool,
 ) -> (Vec<(&'static str, String)>, TrackioLaunch) {
-    let Some(server_url) = trackio_server_url() else {
+    trackio_run_env_from(&process_env, &synced_env_var, run_id, remote)
+}
+
+/// [`trackio_run_env_with_launch`] with its two sources passed in, as for
+/// [`trackio_connection_from`].
+fn trackio_run_env_from(
+    process: &dyn Fn(&str) -> Option<String>,
+    synced: &dyn Fn(&str) -> Option<String>,
+    run_id: &str,
+    remote: bool,
+) -> (Vec<(&'static str, String)>, TrackioLaunch) {
+    let Some((server_url, token)) = trackio_connection_from(process, synced) else {
         return (Vec::new(), TrackioLaunch::Off);
     };
+    let project = process(TRACKIO_PROJECT).or_else(|| synced(TRACKIO_PROJECT));
     trackio_run_env_for(
         &server_url,
-        trackio_project().as_deref(),
-        trackio_write_token().as_deref(),
+        project.as_deref(),
+        token.as_deref(),
         run_id,
         remote,
     )
@@ -724,6 +814,17 @@ fn trackio_run_env_for(
                 reason: format!(
                     "configured server {server_url} is local-only and cannot be reached by a remote backend; submitting without Trackio"
                 ),
+            },
+        );
+    }
+    // The rest of the Settings verdict's static checks. Reachability and write
+    // access need a network probe, which a launch does not wait on; Test in
+    // Settings and `orx trackio` cover those.
+    if project.is_none_or(|project| project.trim().is_empty()) {
+        return (
+            Vec::new(),
+            TrackioLaunch::Skipped {
+                reason: format!("{TRACKIO_PROJECT} is not set; submitting without Trackio"),
             },
         );
     }
@@ -783,6 +884,7 @@ fn align_trackio_launch_with_env(
 
 fn run_env_from(
     synced: Vec<(String, String)>,
+    trackio: (Vec<(&'static str, String)>, TrackioLaunch),
     run_id: &str,
     project_id: &str,
     tensorboard: bool,
@@ -793,8 +895,8 @@ fn run_env_from(
     Vec<crate::jobs::TrackingDescriptor>,
 )> {
     let mut env = synced.into_iter().collect();
-    let (vars, mut launch) = trackio_run_env_with_launch(run_id, remote);
-    apply_trackio_vars(&mut env, &vars, remote);
+    let (vars, mut launch) = trackio;
+    apply_trackio_vars(&mut env, &vars, &launch, remote);
     align_trackio_launch_with_env(&mut launch, &env);
     announce_trackio_launch(&launch);
     let mut tracking: Vec<_> = launch.descriptor().into_iter().collect();
@@ -825,6 +927,7 @@ pub fn run_env(
 )> {
     run_env_from(
         list_synced_env(),
+        trackio_run_env_with_launch(run_id, remote),
         run_id,
         project_id,
         tensorboard,
@@ -833,6 +936,8 @@ pub fn run_env(
     )
 }
 
+/// [`run_env`] with the synced file at `path` as its only source: neither
+/// orx's own environment nor the real `~/.openresearch/env` is read.
 #[cfg(test)]
 pub(crate) fn run_env_from_file(
     path: &std::path::Path,
@@ -844,8 +949,17 @@ pub(crate) fn run_env_from_file(
     std::collections::HashMap<String, String>,
     Vec<crate::jobs::TrackingDescriptor>,
 )> {
+    let synced = list_synced_env_from(path);
+    let saved = |key: &str| {
+        synced
+            .iter()
+            .find(|(saved_key, _)| saved_key == key)
+            .map(|(_, value)| value.clone())
+    };
+    let trackio = trackio_run_env_from(&|_: &str| None, &saved, run_id, remote);
     run_env_from(
-        list_synced_env_from(path),
+        synced.clone(),
+        trackio,
         run_id,
         project_id,
         tensorboard,
@@ -977,27 +1091,40 @@ pub fn run_env_for_tracking(
     env
 }
 
-/// Apply [`trackio_run_env`] to a run's environment map.
+/// Merge the resolved Trackio variables from [`trackio_run_env_for`] into a
+/// run's environment map, which already holds the synced file's values.
 ///
-/// An explicit `TRACKIO_RUN` already in the map is left alone; the rest are
-/// overwritten, because the resolved value is the one the link and the probe
-/// used and a run pointed somewhere else is worse than no tracking at all.
-/// Merge resolved Trackio variables into a run environment, with the values
-/// passed in so the behavior is testable without touching process state.
+/// An explicit `TRACKIO_RUN` already in the map is left alone on a local run;
+/// the rest are overwritten, because the resolved value is the one the link and
+/// the probe used and a run pointed somewhere else is worse than no tracking at
+/// all. The saved address and token are dropped before the merge: they are one
+/// credential pair, so a resolved address with no token of its own must not
+/// inherit the token saved for another server. A skipped connection reaches
+/// the run in no form.
 fn apply_trackio_vars(
     env: &mut std::collections::HashMap<String, String>,
     vars: &[(&'static str, String)],
+    launch: &TrackioLaunch,
     remote: bool,
 ) {
-    if remote {
-        for key in [
+    let stale: &[&str] = match launch {
+        _ if remote => &[
             TRACKIO_SERVER_URL,
             TRACKIO_PROJECT,
             TRACKIO_RUN,
             TRACKIO_WRITE_TOKEN,
-        ] {
-            env.remove(key);
-        }
+        ],
+        TrackioLaunch::Skipped { .. } => &[
+            TRACKIO_SERVER_URL,
+            TRACKIO_PROJECT,
+            TRACKIO_RUN,
+            TRACKIO_WRITE_TOKEN,
+        ],
+        TrackioLaunch::Injected { .. } => &[TRACKIO_SERVER_URL, TRACKIO_WRITE_TOKEN],
+        TrackioLaunch::Off => &[],
+    };
+    for key in stale {
+        env.remove(*key);
     }
     for (key, value) in vars {
         if *key == TRACKIO_RUN {
@@ -1091,11 +1218,19 @@ mod tests {
         ]
     }
 
+    fn configured_launch() -> TrackioLaunch {
+        TrackioLaunch::Injected {
+            server_url: "http://127.0.0.1:7860".to_string(),
+            project: Some("demo".to_string()),
+            run: "run-1".to_string(),
+        }
+    }
+
     #[test]
     fn an_unconfigured_run_env_is_left_exactly_as_it_was() {
         let mut env =
             std::collections::HashMap::from([("HF_TOKEN".to_string(), "hf_x".to_string())]);
-        apply_trackio_vars(&mut env, &[], false);
+        apply_trackio_vars(&mut env, &[], &TrackioLaunch::Off, false);
         assert_eq!(
             env,
             std::collections::HashMap::from([("HF_TOKEN".to_string(), "hf_x".to_string())])
@@ -1105,7 +1240,7 @@ mod tests {
     #[test]
     fn a_configured_run_env_gets_every_resolved_variable() {
         let mut env = std::collections::HashMap::new();
-        apply_trackio_vars(&mut env, &configured(), false);
+        apply_trackio_vars(&mut env, &configured(), &configured_launch(), false);
         assert_eq!(
             env,
             std::collections::HashMap::from([
@@ -1206,7 +1341,7 @@ mod tests {
             (TRACKIO_PROJECT.to_string(), "stale".to_string()),
             (TRACKIO_RUN.to_string(), "mine".to_string()),
         ]);
-        apply_trackio_vars(&mut env, &configured(), false);
+        apply_trackio_vars(&mut env, &configured(), &configured_launch(), false);
         assert_eq!(
             env,
             std::collections::HashMap::from([
@@ -1232,7 +1367,7 @@ mod tests {
             "generated",
             false,
         );
-        apply_trackio_vars(&mut env, &vars, false);
+        apply_trackio_vars(&mut env, &vars, &launch, false);
         align_trackio_launch_with_env(&mut launch, &env);
         assert_eq!(env.get(TRACKIO_RUN).map(String::as_str), Some("mine"));
         assert_eq!(
@@ -1306,10 +1441,197 @@ mod tests {
             (TRACKIO_RUN.to_string(), "stale-run".to_string()),
             (TRACKIO_WRITE_TOKEN.to_string(), "stale-token".to_string()),
         ]);
-        apply_trackio_vars(&mut env, &[], true);
+        let (vars, launch) = trackio_run_env_for(
+            "http://127.0.0.1:7860",
+            Some("stale"),
+            Some("stale-token"),
+            "run-1",
+            true,
+        );
+        apply_trackio_vars(&mut env, &vars, &launch, true);
         assert_eq!(
             env,
             std::collections::HashMap::from([("HF_TOKEN".to_string(), "hf_x".to_string())])
+        );
+    }
+
+    #[test]
+    fn a_local_run_never_sends_the_saved_token_to_an_overriding_server() {
+        // The synced file holds server A and its token; the process environment
+        // overrides the address with server B and supplies no token for it.
+        let mut env = std::collections::HashMap::from([
+            ("HF_TOKEN".to_string(), "hf_x".to_string()),
+            (
+                TRACKIO_SERVER_URL.to_string(),
+                "https://a.example".to_string(),
+            ),
+            (TRACKIO_WRITE_TOKEN.to_string(), "token-a".to_string()),
+        ]);
+        let (vars, launch) =
+            trackio_run_env_for("https://b.example", Some("demo"), None, "run-1", false);
+        apply_trackio_vars(&mut env, &vars, &launch, false);
+        assert_eq!(
+            env,
+            std::collections::HashMap::from([
+                ("HF_TOKEN".to_string(), "hf_x".to_string()),
+                (
+                    TRACKIO_SERVER_URL.to_string(),
+                    "https://b.example".to_string()
+                ),
+                (TRACKIO_PROJECT.to_string(), "demo".to_string()),
+                (TRACKIO_RUN.to_string(), "run-1".to_string()),
+            ])
+        );
+    }
+
+    #[test]
+    fn a_trackio_connection_without_a_project_is_skipped_and_kept_out_of_a_local_run() {
+        for project in [None, Some("  ")] {
+            let mut env = std::collections::HashMap::from([
+                ("HF_TOKEN".to_string(), "hf_x".to_string()),
+                (
+                    TRACKIO_SERVER_URL.to_string(),
+                    "https://trackio.example".to_string(),
+                ),
+                (TRACKIO_WRITE_TOKEN.to_string(), "tok".to_string()),
+            ]);
+            let (vars, launch) = trackio_run_env_for(
+                "https://trackio.example",
+                project,
+                Some("tok"),
+                "run-1",
+                false,
+            );
+            apply_trackio_vars(&mut env, &vars, &launch, false);
+            assert_eq!(
+                launch,
+                TrackioLaunch::Skipped {
+                    reason: "TRACKIO_PROJECT is not set; submitting without Trackio".to_string(),
+                }
+            );
+            assert_eq!(launch.descriptor(), None);
+            assert_eq!(
+                env,
+                std::collections::HashMap::from([("HF_TOKEN".to_string(), "hf_x".to_string())])
+            );
+        }
+    }
+
+    #[test]
+    fn trackio_umbrella_tensorboard_rejects_backends_whose_event_files_the_viewer_cannot_reach() {
+        assert_eq!(
+            TensorboardDefault::ssh(false),
+            TensorboardDefault::RemoteRunDirectory
+        );
+        for default in [
+            TensorboardDefault::MODAL,
+            TensorboardDefault::HF_JOBS,
+            TensorboardDefault::ssh(true),
+        ] {
+            // An absolute synced path is the opt-in an explicit-only backend
+            // would accept; these backends must refuse it as well as the flag.
+            for (requested, configured) in [(false, true), (true, false)] {
+                let before: std::collections::HashMap<String, String> = configured
+                    .then(|| {
+                        (
+                            TENSORBOARD_LOGDIR.to_string(),
+                            "/shared/tensorboard/demo/run-1".to_string(),
+                        )
+                    })
+                    .into_iter()
+                    .collect();
+                let mut env = before.clone();
+                let error = apply_tensorboard(&mut env, "project", "run-1", requested, default)
+                    .expect_err("TensorBoard must be refused on this backend");
+                assert!(error
+                    .to_string()
+                    .starts_with("TensorBoard is unavailable: "));
+                assert_eq!(env, before);
+            }
+        }
+    }
+
+    fn synced_env_file(contents: &str) -> std::path::PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("orx-trackio-save-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("env");
+        std::fs::write(&path, contents).unwrap();
+        path
+    }
+
+    fn saved_after(contents: &str, raw_url: &str) -> Vec<(String, String)> {
+        let path = synced_env_file(contents);
+        save_trackio_server_url_at(&path, raw_url).unwrap();
+        let saved = list_synced_env_from(&path);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+        saved
+    }
+
+    fn pairs(values: &[(&str, &str)]) -> Vec<(String, String)> {
+        values
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn saving_a_different_trackio_server_without_a_token_drops_the_old_token() {
+        assert_eq!(
+            saved_after(
+                "export TRACKIO_SERVER_URL='https://a.example'\n\
+                 export TRACKIO_WRITE_TOKEN='token-a'\n\
+                 export TRACKIO_PROJECT='demo'\n",
+                "https://b.example",
+            ),
+            pairs(&[
+                (TRACKIO_SERVER_URL, "https://b.example"),
+                (TRACKIO_PROJECT, "demo"),
+            ])
+        );
+    }
+
+    #[test]
+    fn saving_the_same_trackio_server_keeps_its_token() {
+        assert_eq!(
+            saved_after(
+                "export TRACKIO_SERVER_URL='https://a.example'\n\
+                 export TRACKIO_WRITE_TOKEN='token-a'\n",
+                "https://a.example/",
+            ),
+            pairs(&[
+                (TRACKIO_SERVER_URL, "https://a.example/"),
+                (TRACKIO_WRITE_TOKEN, "token-a"),
+            ])
+        );
+    }
+
+    #[test]
+    fn saving_a_first_trackio_server_keeps_a_token_saved_before_it() {
+        assert_eq!(
+            saved_after(
+                "export TRACKIO_WRITE_TOKEN='token-a'\n",
+                "https://a.example"
+            ),
+            pairs(&[
+                (TRACKIO_WRITE_TOKEN, "token-a"),
+                (TRACKIO_SERVER_URL, "https://a.example"),
+            ])
+        );
+    }
+
+    #[test]
+    fn saving_a_trackio_server_with_an_embedded_token_replaces_the_saved_token() {
+        assert_eq!(
+            saved_after(
+                "export TRACKIO_SERVER_URL='https://a.example'\n\
+                 export TRACKIO_WRITE_TOKEN='token-a'\n",
+                "https://b.example/?write_token=token-b",
+            ),
+            pairs(&[
+                (TRACKIO_SERVER_URL, "https://b.example/"),
+                (TRACKIO_WRITE_TOKEN, "token-b"),
+            ])
         );
     }
 }

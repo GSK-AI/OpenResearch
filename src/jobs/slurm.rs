@@ -501,9 +501,22 @@ mod tests {
         )
         .unwrap();
 
-        let (env, _) =
+        // Control: the file's connection does reach the decision, so a clean
+        // render below is the loopback rule at work, not an ignored fixture.
+        let (local_env, _) =
+            crate::config::run_env_from_file(&env_path, "run-1", "project-1", false, false)
+                .expect("local environment should resolve");
+        assert_eq!(
+            local_env
+                .get(crate::config::TRACKIO_SERVER_URL)
+                .map(String::as_str),
+            Some("http://127.0.0.1:4791")
+        );
+
+        let (env, tracking) =
             crate::config::run_env_from_file(&env_path, "run-1", "project-1", false, true)
                 .expect("remote environment should resolve");
+        assert_eq!(tracking, Vec::new());
         let mut job = spec();
         job.env = env;
         let rendered = render_sbatch(&job);

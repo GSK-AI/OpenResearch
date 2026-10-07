@@ -91,7 +91,7 @@ pub async fn submit_local_modal_with_source(
         &project.id,
         args.tracking == Some(crate::TrackingBackend::Tensorboard),
         true,
-        crate::config::TensorboardDefault::ExplicitOnly,
+        crate::config::TensorboardDefault::MODAL,
     )?;
     if let Ok(hf_token) = hf::resolve_token() {
         env.entry("HF_TOKEN".to_string()).or_insert(hf_token);
