@@ -1018,6 +1018,7 @@
   "settings_create_private_github_repository": "Crear un repositorio privado y subir automáticamente las ramas de los experimentos para que las vean tus colaboradores.",
   "settings_github_new_repository_destination": "Destino del nuevo repositorio",
   "settings_github_resolving_account": "Identificando la cuenta…",
+  "settings_github_account_unavailable": "Cuenta no disponible",
   "settings_github_destination_organization": "Organización",
   "settings_github_organization_label": "Organización de GitHub",
   "settings_github_destination_owner": "Si OpenResearch crea un repositorio privado, estará en {url}.",

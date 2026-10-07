@@ -1018,6 +1018,7 @@
   "settings_create_private_github_repository": "非公開リポジトリを作成し、共同作業者が確認できるように実験ブランチを自動でプッシュします。",
   "settings_github_new_repository_destination": "新しいリポジトリの作成先",
   "settings_github_resolving_account": "アカウントを確認中…",
+  "settings_github_account_unavailable": "アカウントを取得できません",
   "settings_github_destination_organization": "組織",
   "settings_github_organization_label": "GitHub の組織",
   "settings_github_destination_owner": "OpenResearch が非公開リポジトリを作成する場合、{url} の下に作成されます。",

@@ -1018,6 +1018,7 @@
   "settings_create_private_github_repository": "एक निजी रिपॉज़िटरी बनाएं और सहयोगी दृश्यता के लिए प्रयोग ब्रांच अपने आप पुश करें।",
   "settings_github_new_repository_destination": "नई रिपॉज़िटरी का गंतव्य",
   "settings_github_resolving_account": "खाता पहचाना जा रहा है…",
+  "settings_github_account_unavailable": "खाता उपलब्ध नहीं है",
   "settings_github_destination_organization": "संगठन",
   "settings_github_organization_label": "GitHub संगठन",
   "settings_github_destination_owner": "अगर OpenResearch एक निजी रिपॉज़िटरी बनाता है, तो वह {url} के अंतर्गत होगी।",

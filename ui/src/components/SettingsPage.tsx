@@ -3175,7 +3175,7 @@ function OverleafCard() {
 
 // --- git -----------------------------------------------------------------------
 
-function GitTab({
+export function GitTab({
   project,
   onProjectUpdate,
   remote,
@@ -3204,11 +3204,20 @@ function GitTab({
   const hasGithubRepository = Boolean(status?.github.owner && status.github.repo);
   const accountQuery = useQuery({ ...githubAccountQuery(), enabled: Boolean(status?.github.authenticated) });
   const githubLogin = status?.github.authenticated ? accountQuery.data?.login ?? null : null;
+  const accountUnavailable = Boolean(status?.github.authenticated) && !githubLogin && !accountQuery.isFetching;
 
-  const load = async () => { await statusQuery.refetch({ cancelRefetch: false }); };
+  // An account looked up while signed out stays cached for minutes, so a sign-in check refreshes it.
+  const load = async () => {
+    const { data } = await statusQuery.refetch({ cancelRefetch: false });
+    if (data?.github.authenticated) await accountQuery.refetch();
+  };
 
   const syncErrorMessage = (err: unknown) => {
     const message = err instanceof Error ? err.message : String(err);
+    // Repository creation names the organization and how to regain access.
+    if (message.startsWith("GitHub denied repository creation")) {
+      return message;
+    }
     if (message.toLowerCase().includes("archived")) {
       return m.settings_github_archived_error();
     }
@@ -3311,7 +3320,7 @@ function GitTab({
                       onClick={() => setDestinationKind("personal")}
                       disabled={!githubLogin}
                     >
-                      {githubLogin ? githubLogin : m.settings_github_resolving_account()}
+                      {githubLogin ?? (accountUnavailable ? m.settings_github_account_unavailable() : m.settings_github_resolving_account())}
                     </button>
                     <button
                       type="button"
@@ -3336,6 +3345,9 @@ function GitTab({
                       ? m.settings_github_destination_owner({ url: ltr(`github.com/${destinationOwner}`) })
                       : m.settings_github_destination_choose_account()}
                   </p>
+                  {accountUnavailable && (
+                    <Button size="small" className="mt-2.5" onClick={() => void accountQuery.refetch()}>{m.app_retry()}</Button>
+                  )}
                 </div>
                 <div className={GIT_CARD_ACTIONS_CLASS_NAME}>
                   {hasGithubRepository && status.github.url && <ButtonLink href={status.github.url} target="_blank" rel="noreferrer">{m.settings_page_open_on_git_hub()} <ExternalLink size={12} /></ButtonLink>}

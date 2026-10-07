@@ -1012,6 +1012,7 @@
   "settings_create_private_github_repository": "创建私有仓库，并自动推送实验分支以便协作者查看。",
   "settings_github_new_repository_destination": "新仓库位置",
   "settings_github_resolving_account": "正在识别账户…",
+  "settings_github_account_unavailable": "无法获取账户",
   "settings_github_destination_organization": "组织",
   "settings_github_organization_label": "GitHub 组织",
   "settings_github_destination_owner": "如果 OpenResearch 创建私有仓库，它将位于 {url} 下。",
