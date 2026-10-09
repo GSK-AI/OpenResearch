@@ -2119,6 +2119,8 @@ struct CreateRunReq {
     force: bool,
     chat_session_id: Option<String>,
     agent_origin: Option<String>,
+    /// Absent from dashboard callers; checked against orx up's own config dir.
+    caller_config_dir: Option<std::path::PathBuf>,
 }
 
 #[derive(Deserialize)]
@@ -2207,6 +2209,7 @@ pub(crate) async fn submit_run_via_up(
         force: args.force,
         chat_session_id: args.launching_chat_session(),
         agent_origin: args.agent_origin.clone(),
+        caller_config_dir: Some(absolute_config_dir()),
     };
     let response =
         authenticate_up_request(local_client()?.post(format!("http://127.0.0.1:{port}/api/runs")))
@@ -2258,9 +2261,45 @@ pub(crate) async fn cancel_run_via_up(port: u16, run_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Launching with orx up's settings after the caller checked its own would
+/// submit to a different cluster or namespace than the one the caller tested.
+/// A relative `XDG_CONFIG_HOME` names a different dir in each process's working directory.
+fn absolute_config_dir() -> std::path::PathBuf {
+    let dir = crate::config::config_dir();
+    std::path::absolute(&dir).unwrap_or(dir)
+}
+
+fn require_caller_config_dir(
+    caller: Option<&std::path::Path>,
+    own: &std::path::Path,
+) -> Result<()> {
+    let Some(caller) = caller else {
+        return Ok(());
+    };
+    let same = caller == own
+        || crate::paths::canonicalize(caller)
+            .ok()
+            .zip(crate::paths::canonicalize(own).ok())
+            .is_some_and(|(a, b)| a == b);
+    if same {
+        return Ok(());
+    }
+    let base = own.parent().unwrap_or(own);
+    Err(anyhow!(
+        "This command uses the compute settings in {}, but orx up launches runs with \
+         the settings in {}. Set XDG_CONFIG_HOME to {} and re-run, or restart orx up \
+         from this environment.",
+        caller.display(),
+        own.display(),
+        base.display()
+    ))
+}
+
 async fn create_run(State(state): State<AppState>, Json(req): Json<CreateRunReq>) -> ApiResult {
     reject_if_stopping(&state)?;
     reject_if_moving(&state)?;
+    require_caller_config_dir(req.caller_config_dir.as_deref(), &absolute_config_dir())
+        .map_err(bad_request)?;
     let store = Store::open()?;
     let experiment = store
         .get_local_experiment(&req.experiment_id)?
@@ -8719,9 +8758,11 @@ mod tests {
             force: true,
             chat_session_id: Some("session-1".into()),
             agent_origin: None,
+            caller_config_dir: Some("/tmp/orx-config/openresearch".into()),
         };
 
         let value = serde_json::to_value(&request).unwrap();
+        assert_eq!(value["callerConfigDir"], "/tmp/orx-config/openresearch");
         assert_eq!(value["experimentId"], "experiment-1");
         assert_eq!(value["chatSessionId"], "session-1");
         assert_eq!(value["force"], true);
@@ -8729,6 +8770,27 @@ mod tests {
             serde_json::from_value::<CreateRunReq>(value).unwrap(),
             request
         );
+    }
+
+    #[test]
+    fn require_caller_config_dir_rejects_a_different_dir() {
+        let root = std::env::temp_dir().join(format!("orx-caller-config-{}", uuid::Uuid::new_v4()));
+        let own = root.join("up/openresearch");
+        let caller = root.join("agent/openresearch");
+        std::fs::create_dir_all(&own).unwrap();
+        std::fs::create_dir_all(&caller).unwrap();
+
+        assert!(require_caller_config_dir(None, &own).is_ok());
+        assert!(require_caller_config_dir(Some(&own), &own).is_ok());
+        let fresh = root.join("fresh/openresearch");
+        assert!(require_caller_config_dir(Some(&fresh), &fresh).is_ok());
+        assert!(require_caller_config_dir(Some(&own.join("../openresearch")), &own).is_ok());
+        let error = require_caller_config_dir(Some(&caller), &own)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(&caller.display().to_string()));
+        assert!(error.contains(&own.display().to_string()));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
