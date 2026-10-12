@@ -1008,7 +1008,12 @@ pub fn apply_tensorboard(
     let run = tracking_segment(run_id);
     let (log_dir, root_log_dir) = match configured {
         Some(log_dir) => {
-            if !std::path::Path::new(&log_dir).is_absolute() && !log_dir.starts_with("~/") {
+            // The directory is read where the run executes, which is usually a POSIX host
+            // even when orx itself runs on Windows, so a leading `/` counts as absolute.
+            if !std::path::Path::new(&log_dir).is_absolute()
+                && !log_dir.starts_with('/')
+                && !log_dir.starts_with("~/")
+            {
                 return Err(crate::error::anyhow!(
                     "TENSORBOARD_LOGDIR must be an absolute path or start with ~/ so its recorded viewer command is stable."
                 ));
