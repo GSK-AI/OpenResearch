@@ -1294,5 +1294,11 @@
   "sidebar_reveal_project": "Reveal in Finder",
   "sidebar_filter": "Filter",
   "sidebar_group_by": "Group by",
-  "sidebar_one_list": "In one list"
+  "sidebar_one_list": "In one list",
+  "settings_github_manage_project": "Manage existing project",
+  "settings_github_choose_project": "Choose a project…",
+  "settings_github_enable_under": "Enable syncing in…",
+  "settings_overleaf_file_sync": "Sync paper files",
+  "settings_overleaf_live_sync": "Sync live edits",
+  "settings_overleaf_intro": "Credentials stay on this machine. Link individual papers from the editor."
 }

@@ -196,6 +196,15 @@ pub async fn viewer_login() -> Result<String> {
         })
 }
 
+pub async fn viewer_organizations() -> Result<Vec<String>> {
+    let logins = gh(
+        &["api", "--paginate", "user/orgs", "--jq", ".[].login"],
+        Duration::from_secs(15),
+    )
+    .await?;
+    Ok(logins.lines().map(str::to_owned).collect())
+}
+
 pub async fn repo_meta(owner: &str, repo: &str) -> Result<Option<RepoMeta>> {
     let body = match gh(
         &["api", &repository_endpoint(owner, repo)],

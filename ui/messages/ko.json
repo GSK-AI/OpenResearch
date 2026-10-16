@@ -1294,5 +1294,11 @@
   "sidebar_reveal_project": "Finder에서 표시",
   "sidebar_filter": "필터",
   "sidebar_group_by": "그룹화 기준",
-  "sidebar_one_list": "단일 목록"
+  "sidebar_one_list": "단일 목록",
+  "settings_github_manage_project": "기존 프로젝트 관리",
+  "settings_github_choose_project": "프로젝트 선택…",
+  "settings_github_enable_under": "다음 계정에서 동기화 활성화…",
+  "settings_overleaf_file_sync": "논문 파일 동기화",
+  "settings_overleaf_live_sync": "실시간 편집 동기화",
+  "settings_overleaf_intro": "인증 정보는 이 기기에 저장됩니다. 각 논문은 편집기에서 연결하세요."
 }

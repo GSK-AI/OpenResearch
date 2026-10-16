@@ -1294,5 +1294,11 @@
   "sidebar_reveal_project": "Mostrar en Finder",
   "sidebar_filter": "Filtrar",
   "sidebar_group_by": "Agrupar por",
-  "sidebar_one_list": "En una lista"
+  "sidebar_one_list": "En una lista",
+  "settings_github_manage_project": "Gestionar un proyecto existente",
+  "settings_github_choose_project": "Elegir un proyecto…",
+  "settings_github_enable_under": "Activar sincronización en…",
+  "settings_overleaf_file_sync": "Sincronizar archivos del artículo",
+  "settings_overleaf_live_sync": "Sincronizar ediciones en vivo",
+  "settings_overleaf_intro": "Las credenciales se guardan en este equipo. Vincula cada artículo desde el editor."
 }

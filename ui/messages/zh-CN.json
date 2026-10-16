@@ -1294,5 +1294,11 @@
   "sidebar_reveal_project": "在访达中显示",
   "sidebar_filter": "筛选",
   "sidebar_group_by": "分组方式",
-  "sidebar_one_list": "单一列表"
+  "sidebar_one_list": "单一列表",
+  "settings_github_manage_project": "管理现有项目",
+  "settings_github_choose_project": "选择项目…",
+  "settings_github_enable_under": "启用同步到…",
+  "settings_overleaf_file_sync": "同步论文文件",
+  "settings_overleaf_live_sync": "同步实时编辑",
+  "settings_overleaf_intro": "凭据保存在本机。在编辑器中关联各篇论文。"
 }

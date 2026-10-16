@@ -1294,5 +1294,11 @@
   "sidebar_reveal_project": "Finder में दिखाएँ",
   "sidebar_filter": "फ़िल्टर",
   "sidebar_group_by": "समूह बनाएँ",
-  "sidebar_one_list": "एक सूची में"
+  "sidebar_one_list": "एक सूची में",
+  "settings_github_manage_project": "मौजूदा प्रोजेक्ट प्रबंधित करें",
+  "settings_github_choose_project": "प्रोजेक्ट चुनें…",
+  "settings_github_enable_under": "इसमें सिंक चालू करें…",
+  "settings_overleaf_file_sync": "पेपर की फ़ाइलें सिंक करें",
+  "settings_overleaf_live_sync": "लाइव बदलाव सिंक करें",
+  "settings_overleaf_intro": "लॉगिन जानकारी इसी मशीन पर रहती है। हर पेपर को एडिटर से लिंक करें।"
 }

@@ -15,7 +15,9 @@ const compiled = ts.transpileModule(source, {
 // The queries GitTab reads, replaced per test; every other query has no data.
 let queries = {};
 let clicks = new Map();
-const text = (children) => React.Children.toArray(children).filter((child) => typeof child === "string").join("");
+let menuOpen = false;
+let enableCalls = [];
+const text = (children) => React.Children.toArray(children).filter((child) => typeof child === "string").join("").trim();
 // Every other app module is a stub: its exports render nothing and return nothing.
 const stub = new Proxy({}, { get: (_, name) => (name === "__esModule" ? false : () => null) });
 const queryFactories = new Proxy({}, { get: (_, name) => (...args) => ({ queryKey: [name, ...args] }) });
@@ -31,13 +33,20 @@ const mocks = {
   "../paraglide/messages.js": { m: new Proxy({}, { get: (_, name) => () => String(name) }) },
   "../paraglide/runtime.js": { getLocale: () => "en", isLocale: () => true },
   "../i18n": { ltr: String },
+  "./ModelPicker": {
+    usePopover: () => ({ open: menuOpen, setOpen: (value) => { menuOpen = value; }, ref: { current: null } }),
+  },
+  "../api": new Proxy({}, { get: (_, name) => name === "enableProjectGithub" ? async (...args) => {
+    enableCalls.push(args);
+    return { project: { id: "project-1" }, git: signedIn };
+  } : stub[name] }),
   "./ui/cn": { cn: (...names) => names.filter(Boolean).join(" ") },
   // Plain elements, keeping each button's click handler by its label.
   "./ui": new Proxy({}, {
     get: (_, name) => {
-      if (name === "Button") return ({ children, onClick }) => {
+      if (name === "Button" || name === "MenuItem") return ({ children, onClick, disabled }) => {
         clicks.set(text(children), onClick);
-        return React.createElement("button", null, children);
+        return React.createElement("button", { disabled }, children);
       };
       if (name === "Badge") return ({ children }) => React.createElement("span", null, children);
       if (name === "Input") return () => React.createElement("input");
@@ -65,69 +74,82 @@ const gitStatus = (github) => ({
 const signedIn = gitStatus({ authenticated: true });
 const signedOut = gitStatus({ authenticated: false });
 
-function renderGitTab({ status, statusError = null, account = { data: undefined, isFetching: false }, refetchedStatus = status }) {
+function renderGitTab({ status, statusError = null, account = { data: { login: "example-user" }, isFetching: false }, organizations = { data: { organizations: ["research-org"] }, isFetching: false }, open = false }) {
   const refetches = [];
+  menuOpen = open;
+  enableCalls = [];
   queries = {
-    getProjectGitStatusQuery: {
-      data: status,
-      error: statusError,
-      refetch: async () => { refetches.push("status"); return { data: refetchedStatus }; },
-    },
-    githubAccountQuery: { ...account, refetch: async () => { refetches.push("account"); return { data: account.data }; } },
+    getProjectGitStatusQuery: { data: status, error: statusError },
+    githubAccountQuery: { ...account, refetch: async () => { refetches.push("account"); } },
+    githubOrganizationsQuery: { ...organizations, refetch: async () => { refetches.push("organizations"); } },
   };
   clicks = new Map();
   const html = renderToStaticMarkup(React.createElement(exports.GitTab, {
     project: { id: "project-1", name: "Project" },
     onProjectUpdate: () => {},
-    remote: false,
   }));
   return { html, refetches };
 }
 
-const buttonLabels = (html) => [...html.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((match) => match[1]);
+const buttonLabels = (html) => [...html.matchAll(/<button[^>]*>([\s\S]*?)<\/button>/g)].map((match) => match[1].replaceAll(/<[^>]*>/g, "").trim());
 const errors = (html) => [...html.matchAll(/<div class="error">([^<]*)<\/div>/g)].map((match) => match[1]);
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
-test("checking GitHub after signing in refreshes the account cached while signed out", async () => {
-  const { refetches } = renderGitTab({ status: signedOut, refetchedStatus: signedIn });
-
-  clicks.get("settings_check_again")();
-  await settle();
-
-  assert.deepEqual(refetches, ["status", "account"]);
+test("signed-out projects cannot enable GitHub syncing", () => {
+  assert.deepEqual(buttonLabels(renderGitTab({ status: signedOut }).html), []);
 });
 
-test("checking GitHub while still signed out leaves the account alone", async () => {
-  const { refetches } = renderGitTab({ status: signedOut });
-
-  clicks.get("settings_check_again")();
-  await settle();
-
-  assert.deepEqual(refetches, ["status"]);
+test("a local-only project opens an owner menu without creating a repository", () => {
+  const { html } = renderGitTab({ status: signedIn });
+  assert.equal(html.includes('role="menu"'), false);
+  assert.equal(html.includes("settings_github_new_repository_destination"), false);
+  clicks.get("repository_enable_syncing")({ currentTarget: null });
+  assert.equal(menuOpen, true);
+  assert.deepEqual(enableCalls, []);
 });
 
-test("a finished account lookup without a login offers a retry", async () => {
-  const { html, refetches } = renderGitTab({ status: signedIn, account: { data: { login: null }, isFetching: false } });
+test("choosing an organization enables only the selected project under that owner", async () => {
+  const { html } = renderGitTab({ status: signedIn, open: true });
+  assert.equal(html.includes('role="menu"'), true);
+  assert.deepEqual(buttonLabels(html), ["repository_enable_syncing", "example-user", "research-org"]);
+  clicks.get("research-org")();
+  await settle();
+  assert.deepEqual(enableCalls, [["project-1", "research-org"]]);
+  assert.equal(menuOpen, false);
+});
 
-  assert.deepEqual(buttonLabels(html), [
-    "settings_github_account_unavailable",
-    "settings_github_destination_organization",
-    "app_retry",
-    "repository_enable_syncing",
-  ]);
+test("choosing the personal account uses the authenticated viewer", async () => {
+  renderGitTab({ status: signedIn, open: true });
+  clicks.get("example-user")();
+  await settle();
+  assert.deepEqual(enableCalls, [["project-1", undefined]]);
+});
+
+test("an existing repository resumes syncing without a destination menu", async () => {
+  renderGitTab({ status: gitStatus({ authenticated: true, owner: "existing-org", repo: "paper" }) });
+  clicks.get("repository_enable_syncing")({ currentTarget: null });
+  await settle();
+  assert.deepEqual(enableCalls, [["project-1", undefined]]);
+  assert.equal(menuOpen, false);
+});
+
+test("cached owner choices stay visible without a loading placeholder during refresh", () => {
+  const { html } = renderGitTab({ status: signedIn, open: true,
+    account: { data: { login: "example-user" }, isFetching: true },
+    organizations: { data: { organizations: ["research-org"] }, isFetching: true } });
+  assert.equal(html.includes('aria-busy="true"'), false);
+  assert.ok(buttonLabels(html).includes("research-org"));
+});
+
+test("initial discovery reserves space and a failed account lookup offers retry", async () => {
+  const loading = renderGitTab({ status: signedIn, open: true,
+    account: { data: undefined, isFetching: true }, organizations: { data: undefined, isFetching: true } });
+  assert.equal(loading.html.includes('aria-busy="true"'), true);
+  const { refetches } = renderGitTab({ status: signedIn, open: true,
+    account: { data: { login: null }, isFetching: false }, organizations: { data: undefined, isFetching: false } });
   clicks.get("app_retry")();
   await settle();
-  assert.deepEqual(refetches, ["account"]);
-});
-
-test("an account lookup in flight shows progress without a retry", () => {
-  const { html } = renderGitTab({ status: signedIn, account: { data: undefined, isFetching: true } });
-
-  assert.deepEqual(buttonLabels(html), [
-    "settings_github_resolving_account",
-    "settings_github_destination_organization",
-    "repository_enable_syncing",
-  ]);
+  assert.deepEqual(refetches, ["account", "organizations"]);
 });
 
 test("a repository-creation error keeps its organization and SSO guidance", () => {

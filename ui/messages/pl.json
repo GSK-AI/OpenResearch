@@ -1294,5 +1294,11 @@
   "sidebar_reveal_project": "Pokaż w Finderze",
   "sidebar_filter": "Filtruj",
   "sidebar_group_by": "Grupuj według",
-  "sidebar_one_list": "Na jednej liście"
+  "sidebar_one_list": "Na jednej liście",
+  "settings_github_manage_project": "Zarządzaj istniejącym projektem",
+  "settings_github_choose_project": "Wybierz projekt…",
+  "settings_github_enable_under": "Włącz synchronizację w…",
+  "settings_overleaf_file_sync": "Synchronizuj pliki artykułu",
+  "settings_overleaf_live_sync": "Synchronizuj zmiany na żywo",
+  "settings_overleaf_intro": "Dane logowania pozostają na tym komputerze. Łącz poszczególne artykuły w edytorze."
 }

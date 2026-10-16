@@ -1294,5 +1294,11 @@
   "sidebar_reveal_project": "إظهار في Finder",
   "sidebar_filter": "تصفية",
   "sidebar_group_by": "تجميع حسب",
-  "sidebar_one_list": "في قائمة واحدة"
+  "sidebar_one_list": "في قائمة واحدة",
+  "settings_github_manage_project": "إدارة مشروع موجود",
+  "settings_github_choose_project": "اختر مشروعًا…",
+  "settings_github_enable_under": "تفعيل المزامنة في…",
+  "settings_overleaf_file_sync": "مزامنة ملفات الورقة",
+  "settings_overleaf_live_sync": "مزامنة التعديلات المباشرة",
+  "settings_overleaf_intro": "تبقى بيانات الدخول على هذا الجهاز. اربط كل ورقة من المحرر."
 }

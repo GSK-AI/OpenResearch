@@ -537,6 +537,7 @@ fn router(state: AppState, remote_auth: Option<RemoteAuth>) -> Router {
         )
         .route("/api/projects/{id}/github/push", post(push_project_github))
         .route("/api/github/account", get(github_account))
+        .route("/api/github/organizations", get(github_organizations))
         .route(
             "/api/github/project-repo-preview",
             get(github_project_repo_preview),
@@ -1894,6 +1895,13 @@ async fn github_account() -> ApiResult {
     Ok(Json(
         json!({ "login": local::github::viewer_login().await.ok() }),
     ))
+}
+
+async fn github_organizations() -> ApiResult {
+    let organizations = local::github::viewer_organizations()
+        .await
+        .map_err(bad_request)?;
+    Ok(Json(json!({ "organizations": organizations })))
 }
 
 #[derive(Deserialize)]

@@ -1294,5 +1294,11 @@
   "sidebar_reveal_project": "نمایش در Finder",
   "sidebar_filter": "فیلتر",
   "sidebar_group_by": "گروه‌بندی بر اساس",
-  "sidebar_one_list": "در یک فهرست"
+  "sidebar_one_list": "در یک فهرست",
+  "settings_github_manage_project": "مدیریت پروژهٔ موجود",
+  "settings_github_choose_project": "انتخاب پروژه…",
+  "settings_github_enable_under": "فعال‌سازی همگام‌سازی در…",
+  "settings_overleaf_file_sync": "همگام‌سازی فایل‌های مقاله",
+  "settings_overleaf_live_sync": "همگام‌سازی ویرایش‌های زنده",
+  "settings_overleaf_intro": "اطلاعات ورود روی این دستگاه می‌ماند. هر مقاله را از ویرایشگر پیوند دهید."
 }

@@ -321,6 +321,7 @@ export const searchPapers = (q: string, signal?: AbortSignal) =>
 /** The signed-in GitHub login, for naming the account a new repo lands on.
  * `login` is null when there's no usable token. */
 export const githubAccount = (signal?: AbortSignal) => get<{ login: string | null }>("/api/github/account", signal);
+export const githubOrganizations = (signal?: AbortSignal) => get<{ organizations: string[] }>("/api/github/organizations", signal);
 
 export const githubProjectRepoPreview = (name: string, signal?: AbortSignal) =>
   get<{ repo: string }>(`/api/github/project-repo-preview?name=${encodeURIComponent(name)}`, signal);
