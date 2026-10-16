@@ -1916,6 +1916,7 @@ export interface ContextUsage {
 }
 
 export interface ChatSession {
+  awaitingInput?: boolean;
   id: string;
   projectId: string;
   harness: HarnessId;
