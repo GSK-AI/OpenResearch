@@ -32,7 +32,7 @@ import {
 } from "../queries/settings";
 
 import { getOverleafSettingsQuery } from "../queries/files";
-import { githubAccountQuery, githubOrganizationsQuery, listProjectsQuery, listRunsQuery } from "../queries/projects";
+import { githubAccountQuery, githubOrganizationsQuery, listProjectsQuery, listRunsQuery, repoAccessQuery } from "../queries/projects";
 import {
   ArrowLeft,
   ArrowRight,
@@ -3238,6 +3238,12 @@ export function GitTab({
   const [actionError, setError] = useState<string | null>(null);
   const error = actionError ?? statusQuery.error?.message ?? null;
   const hasGithubRepository = Boolean(status?.github.owner && status.github.repo);
+  const accessQuery = useQuery({
+    ...repoAccessQuery(status?.github.owner ?? "", status?.github.repo ?? ""),
+    enabled: hasGithubRepository && Boolean(status?.github.authenticated) && !status?.github.enabled,
+  });
+  const checkingAccess = hasGithubRepository && !accessQuery.data && !accessQuery.error;
+  const canResumeRepository = hasGithubRepository && Boolean(accessQuery.data?.canPush);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const ownerMenu = usePopover(triggerRef);
   const accountQuery = useQuery({ ...githubAccountQuery(), enabled: ownerMenu.open });
@@ -3308,14 +3314,15 @@ export function GitTab({
               <div className="flex flex-wrap gap-2 mt-3.5">
                 {hasGithubRepository && status.github.url && <ButtonLink href={status.github.url} target="_blank" rel="noreferrer">{m.settings_page_open_on_git_hub()} <ExternalLink size={12} /></ButtonLink>}
                 <div ref={ownerMenu.ref} className="relative">
-                  <Button variant="primary" disabled={saving} aria-expanded={ownerMenu.open} aria-haspopup="menu" onClick={(event) => {
+                  <Button variant="primary" disabled={saving || checkingAccess || Boolean(accessQuery.error)} aria-expanded={ownerMenu.open} aria-haspopup={canResumeRepository ? undefined : "menu"} onClick={(event) => {
                     triggerRef.current = event.currentTarget;
-                    if (hasGithubRepository) enableSync();
+                    if (canResumeRepository) enableSync();
                     else ownerMenu.setOpen(!ownerMenu.open);
-                  }}>{saving ? m.repository_enabling() : m.repository_enable_syncing()} {!hasGithubRepository && <ChevronDown size={14} />}</Button>
+                  }}>{saving ? m.repository_enabling() : checkingAccess ? m.common_checking() : m.repository_enable_syncing()} {!canResumeRepository && !checkingAccess && <ChevronDown size={14} />}</Button>
                   {ownerMenu.open && (
                     <div role="menu" aria-label={m.settings_github_new_repository_destination()} className="absolute start-0 top-full z-50 mt-2 w-72 max-w-[calc(100vw-2rem)] max-h-64 overflow-y-auto rounded-lg border border-border bg-background p-2 shadow-modal">
                       <div className="px-2 py-1 text-sm font-medium text-subtext">{m.settings_github_enable_under()}</div>
+                      {hasGithubRepository && <p className="px-2 py-1 m-0 text-sm text-text">{m.settings_create_private_github_repository()}</p>}
                       {owners.map((owner) => <MenuItem key={owner} role="menuitem" onClick={() => enableSync(owner)}>{owner}</MenuItem>)}
                       {!owners.length && (accountQuery.isFetching || organizationsQuery.isFetching) && (
                         <div role="status" aria-label={m.settings_page_loading()} aria-busy="true" className="px-2 py-2">
@@ -3334,6 +3341,12 @@ export function GitTab({
                     </div>
                   )}
                 </div>
+                {accessQuery.error && (
+                  <div className="basis-full text-sm text-text">
+                    <p className="mt-2 mb-0">{accessQuery.error.message}</p>
+                    <Button size="small" className="mt-2" onClick={() => void accessQuery.refetch()}>{m.app_retry()}</Button>
+                  </div>
+                )}
               </div>
             )}
             {status.github.enabled && (

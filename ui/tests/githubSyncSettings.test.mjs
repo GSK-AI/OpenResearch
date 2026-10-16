@@ -74,12 +74,13 @@ const gitStatus = (github) => ({
 const signedIn = gitStatus({ authenticated: true });
 const signedOut = gitStatus({ authenticated: false });
 
-function renderGitTab({ status, statusError = null, account = { data: { login: "example-user" }, isFetching: false }, organizations = { data: { organizations: ["research-org"] }, isFetching: false }, open = false }) {
+function renderGitTab({ status, statusError = null, account = { data: { login: "example-user" }, isFetching: false }, organizations = { data: { organizations: ["research-org"] }, isFetching: false }, access = { data: { canPush: true } }, open = false }) {
   const refetches = [];
   menuOpen = open;
   enableCalls = [];
   queries = {
     getProjectGitStatusQuery: { data: status, error: statusError },
+    repoAccessQuery: { ...access, refetch: async () => { refetches.push("access"); } },
     githubAccountQuery: { ...account, refetch: async () => { refetches.push("account"); } },
     githubOrganizationsQuery: { ...organizations, refetch: async () => { refetches.push("organizations"); } },
   };
@@ -131,6 +132,32 @@ test("an existing repository resumes syncing without a destination menu", async 
   await settle();
   assert.deepEqual(enableCalls, [["project-1", undefined]]);
   assert.equal(menuOpen, false);
+});
+
+test("read-only or archived repositories require choosing the replacement owner", async () => {
+  const status = gitStatus({ authenticated: true, owner: "upstream", repo: "paper" });
+  renderGitTab({ status, access: { data: { canPush: false } } });
+  clicks.get("repository_enable_syncing")({ currentTarget: null });
+  assert.equal(menuOpen, true);
+  assert.deepEqual(enableCalls, []);
+  const { html } = renderGitTab({ status, access: { data: { canPush: false } }, open: true });
+  assert.ok(html.includes("settings_create_private_github_repository"));
+  clicks.get("research-org")();
+  await settle();
+  assert.deepEqual(enableCalls, [["project-1", "research-org"]]);
+});
+
+test("repository access must finish loading before enabling and failures offer retry", async () => {
+  const status = gitStatus({ authenticated: true, owner: "upstream", repo: "paper" });
+  const pending = renderGitTab({ status, access: { data: undefined } });
+  assert.ok(pending.html.includes('disabled=""'));
+  assert.ok(buttonLabels(pending.html).includes("common_checking"));
+  const failed = renderGitTab({ status, access: { error: new Error("GitHub unavailable") } });
+  assert.ok(failed.html.includes('disabled=""'));
+  assert.ok(failed.html.includes("GitHub unavailable"));
+  clicks.get("app_retry")();
+  await settle();
+  assert.deepEqual(failed.refetches, ["access"]);
 });
 
 test("cached owner choices stay visible without a loading placeholder during refresh", () => {
