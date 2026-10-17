@@ -228,4 +228,3 @@ export function ExperimentLineage({ node, onSelect }: { node: HistoryNode; onSel
     </section>
   );
 }
-
