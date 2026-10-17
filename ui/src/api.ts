@@ -321,6 +321,7 @@ export const searchPapers = (q: string, signal?: AbortSignal) =>
 /** The signed-in GitHub login, for naming the account a new repo lands on.
  * `login` is null when there's no usable token. */
 export const githubAccount = (signal?: AbortSignal) => get<{ login: string | null }>("/api/github/account", signal);
+export const githubOrganizations = (signal?: AbortSignal) => get<{ organizations: string[] }>("/api/github/organizations", signal);
 
 export const githubProjectRepoPreview = (name: string, signal?: AbortSignal) =>
   get<{ repo: string }>(`/api/github/project-repo-preview?name=${encodeURIComponent(name)}`, signal);
@@ -941,6 +942,8 @@ export const saveModalToken = (tokenId: string, tokenSecret: string) =>
 export interface EnvVar {
   key: string;
   maskedValue: string;
+  /** Set only for non-secret keys, which are shown and edited in the clear. */
+  value?: string | null;
   inProcessEnv: boolean;
 }
 
@@ -1179,6 +1182,31 @@ export interface RayPreflight {
 /** Live-test a Ray Jobs / Dashboard endpoint. */
 export const rayPreflight = (address?: string) =>
   post<RayPreflight>("/api/settings/ray/preflight", { address: address ?? null });
+
+export interface TrackioSettings {
+  serverUrl: string | null;
+  project: string | null;
+}
+
+export const getTrackioSettings = (signal?: AbortSignal) =>
+  get<TrackioSettings>("/api/settings/trackio", signal);
+
+export interface TrackioPreflight {
+  reachable: boolean;
+  version: string | null;
+  writeAccess: boolean | null;
+  error: string | null;
+}
+
+export const trackioPreflight = () => post<TrackioPreflight>("/api/settings/trackio/preflight", {});
+
+/** The run on the saved Trackio dashboard; hf runs never receive the Trackio variables. */
+export function trackioRunUrl(settings: TrackioSettings | undefined, run: Pick<Run, "id" | "backend">) {
+  if (!settings?.serverUrl || backendKind(run.backend) === "hf_job") return null;
+  if (!settings.project) return settings.serverUrl;
+  const query = new URLSearchParams({ project: settings.project, runs: run.id });
+  return `${settings.serverUrl}/?${query}`;
+}
 
 // --- settings: compute targets (unified list + default) ------------------------
 
@@ -1468,8 +1496,10 @@ export const getProjectGitStatus = (projectId: string, signal?: AbortSignal) =>
 export const initializeProjectGit = (projectId: string) =>
   post<ProjectGitStatus>(`/api/projects/${projectId}/git/init`);
 
-export const enableProjectGithub = (projectId: string) =>
-  post<{ project: Project; git: ProjectGitStatus }>(`/api/projects/${projectId}/github`);
+export const enableProjectGithub = (projectId: string, organization?: string) =>
+  post<{ project: Project; git: ProjectGitStatus }>(`/api/projects/${projectId}/github`, {
+    ...(organization ? { organization } : {}),
+  });
 
 export const disableProjectGithub = (projectId: string) =>
   post<{ project: Project; git: ProjectGitStatus }>(`/api/projects/${projectId}/github/disable`);
@@ -1914,6 +1944,7 @@ export interface ContextUsage {
 }
 
 export interface ChatSession {
+  awaitingInput?: boolean;
   id: string;
   projectId: string;
   harness: HarnessId;
