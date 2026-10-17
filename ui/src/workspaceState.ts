@@ -37,7 +37,7 @@ export interface GlobalWorkspace {
   lastLocation: string | null;
   railOpen: boolean;
   panelWidth: number;
-  experimentsView: "tree" | "table" | "history";
+  experimentsView: "tree" | "table";
 }
 
 export const settingsTabs = ["settings", "harnesses", "projects", "compute", "instances", "environment", "storage"] as const;

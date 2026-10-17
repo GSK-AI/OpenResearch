@@ -48,7 +48,7 @@ const {
   layoutLineage,
   originOf,
   splitExperimentTitle,
-} = load("components/experimentHistoryModel.ts", {
+} = load("components/experimentLineageModel.ts", {
   "../api": api,
   "../i18n": i18n,
   "../paraglide/messages.js": messages,

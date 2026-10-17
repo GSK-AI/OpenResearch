@@ -17,7 +17,7 @@ import { LogTerminal } from "./LogTerminal";
 import { StatusBadge } from "./StatusBadge";
 import type { TabOpenIntent } from "../tabPreview";
 import { Button, ButtonLink, MenuItem } from "./ui";
-import { historyBackendLabel, historyJobId } from "./experimentHistoryModel";
+import { buildHistoryNodes, historyBackendLabel, historyJobId } from "./experimentLineageModel";
 import { getTrackioSettingsQuery } from "../queries/settings";
 
 export type ExperimentView = "overview" | "terminal";
@@ -26,6 +26,7 @@ export type ExperimentView = "overview" | "terminal";
  *  keyed by `${experiment.id}:${view}` so per-view state resets on switch. */
 export function DetailDrawer({
   experiment,
+  experiments,
   project,
   view,
   runs,
@@ -34,8 +35,10 @@ export function DetailDrawer({
   parentExperiment,
   onOpenView,
   onOpenCode,
+  onOpenExperiment,
 }: {
   experiment: Experiment;
+  experiments: Experiment[];
   /** Owning project — supplies owner/repo for the GitHub branch link. */
   project: Project;
   view: ExperimentView;
@@ -45,20 +48,25 @@ export function DetailDrawer({
   parentExperiment: Experiment | null;
   onOpenView: (view: ExperimentView, runId: string | undefined, intent: TabOpenIntent) => void;
   onOpenCode: (view: CodeView, intent: TabOpenIntent) => void;
+  onOpenExperiment: (id: string, intent: TabOpenIntent) => void;
 }) {
   const expRuns = runs
     .filter((r) => r.experimentId === experiment.id)
     .sort((a, b) => b.createdAt - a.createdAt);
 
   if (view === "overview") {
+    const node = buildHistoryNodes(experiments, runs).find((node) => node.id === experiment.id);
     return (
       <ExperimentOverview
+        lineageNode={node ?? null}
+        onOpenExperiment={onOpenExperiment}
         experiment={experiment}
         parentExperiment={parentExperiment}
         project={project}
         runs={expRuns}
         onOpenLogs={(runId, intent) => onOpenView("terminal", runId, intent)}
         onOpenCode={(intent) => onOpenCode("files", intent)}
+        onOpenDiff={(intent) => onOpenCode("changes", intent)}
      />
     );
   }
