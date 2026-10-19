@@ -203,7 +203,7 @@ export function ExperimentOverview({
 
         {lineageNode && (
           <div className="mt-5.5 border-t border-border-variant pt-4.5">
-            <ExperimentLineage node={lineageNode} onSelect={(id) => onOpenExperiment(id, "preview")} />
+            <ExperimentLineage node={lineageNode} onSelect={onOpenExperiment} />
           </div>
         )}
 

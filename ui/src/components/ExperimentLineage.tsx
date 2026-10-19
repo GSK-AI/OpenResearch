@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { timeAgo, fmtNumber } from "../api";
 import { getLocale } from "../paraglide/runtime.js";
 import { m } from "../paraglide/messages.js";
+import { tabOpenGestureHandlers, type TabOpenIntent } from "../tabPreview";
 import { ancestorsOf, laneCount, shortName, type HistoryNode, type HistoryRow, type HistoryStatus } from "./experimentLineageModel";
 
 export type HistoryOrder = "lineage" | "oldest" | "newest";
@@ -172,13 +173,13 @@ export function Rail({ placed, height, path, selectedId }: {
   );
 }
 
-function LineageStep({ node, current, onSelect }: { node: HistoryNode; current?: boolean; onSelect: (id: string) => void }) {
+function LineageStep({ node, current, onSelect }: { node: HistoryNode; current?: boolean; onSelect: (id: string, intent: TabOpenIntent) => void }) {
   return (
     <button
       type="button"
       disabled={current}
       aria-current={current ? "true" : undefined}
-      onClick={() => onSelect(node.id)}
+      {...tabOpenGestureHandlers<HTMLButtonElement>((intent) => onSelect(node.id, intent))}
       className={`flex min-w-0 items-center gap-2 rounded-sm px-1.5 py-1 text-start ${current ? "bg-highlight" : "hover:bg-hover-faint"}`}
     >
       <StatusLabel status={node.status} word={false} size={11} />
@@ -189,7 +190,7 @@ function LineageStep({ node, current, onSelect }: { node: HistoryNode; current?:
   );
 }
 
-export function ExperimentLineage({ node, onSelect }: { node: HistoryNode; onSelect: (id: string) => void }) {
+export function ExperimentLineage({ node, onSelect }: { node: HistoryNode; onSelect: (id: string, intent: TabOpenIntent) => void }) {
   const [showAllAncestors, setShowAllAncestors] = useState(false);
   useEffect(() => setShowAllAncestors(false), [node.id]);
   const ancestors = ancestorsOf(node);

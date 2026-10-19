@@ -28,6 +28,7 @@ const model = load("experimentLineageModel.ts", {
   "../i18n": { ltr: (text) => text },
   "../paraglide/messages.js": messages,
 });
+const tabPreview = load("../tabPreview.ts", {});
 
 function lineage(expanded) {
   return load("ExperimentLineage.tsx", {
@@ -37,6 +38,7 @@ function lineage(expanded) {
     "../paraglide/messages.js": messages,
     "../paraglide/runtime.js": runtime,
     "./experimentLineageModel": model,
+    "../tabPreview": tabPreview,
   });
 }
 
@@ -74,4 +76,31 @@ test("short lineage has no unnecessary expand control", () => {
   const html = renderToStaticMarkup(React.createElement(ExperimentLineage, { node: nodes[4], onSelect: () => {} }));
   assert.doesNotMatch(html, /aria-expanded/);
   for (let index = 0; index <= 4; index++) assert.match(html, new RegExp(`>Experiment ${index}<`));
+});
+
+test("ancestor and child rows preserve preview and keep-open gestures", () => {
+  const { ExperimentLineage } = lineage(false);
+  const opened = [];
+  const tree = ExperimentLineage({ node: nodes[6], onSelect: (...args) => opened.push(args) });
+  const buttons = [];
+  function visit(element) {
+    if (Array.isArray(element)) return element.forEach(visit);
+    if (!React.isValidElement(element)) return;
+    if (typeof element.type === "function") return visit(element.type(element.props));
+    if (element.type === "button") buttons.push(element.props);
+    visit(element.props.children);
+  }
+  visit(tree);
+  for (const id of ["5", "7"]) {
+    const row = buttons.find((props) => props.children?.[2]?.props?.children === `Experiment ${id}`);
+    assert.ok(row, `missing lineage row ${id}`);
+    row.onClick({});
+    row.onDoubleClick({});
+    row.onAuxClick({ button: 1, preventDefault() {} });
+    row.onKeyDown({ key: "Enter", preventDefault() {} });
+    row.onKeyDown({ key: " ", preventDefault() {} });
+    assert.deepEqual(opened.splice(0), [
+      [id, "preview"], [id, "keepOpen"], [id, "keepOpen"], [id, "keepOpen"], [id, "preview"],
+    ]);
+  }
 });
