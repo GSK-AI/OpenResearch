@@ -377,7 +377,7 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
   const artifacts = artifactsQuery.data ?? null;
 
   const [view, setView] = useState<ExperimentsView>("table");
-  const [showTableLineage, setShowTableLineage] = useState(true);
+  const [showTableLineage, setShowTableLineage] = useState(false);
   const [tableOrder, setTableOrder] = useState<HistoryOrder>("lineage");
   const [showArchivedExperiments, setShowArchivedExperiments] = useState(false);
   // Experiments pane scope: "agent" narrows to the open chat session's work.
